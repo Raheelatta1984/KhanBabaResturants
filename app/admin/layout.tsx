@@ -25,9 +25,11 @@ export default async function AdminLayout({
               <strong>Photos are stored on local disk.</strong> Orders, menu and
               staff live in Postgres and are durable, but this host has no
               persistent disk, so uploaded dish photos disappear when the
-              instance restarts. Set <code>BLOB_READ_WRITE_TOKEN</code> (Vercel
-              Blob) or <code>GOOGLE_DRIVE_SERVICE_ACCOUNT_JSON</code> +{" "}
-              <code>GOOGLE_DRIVE_FOLDER_ID</code> to store photography durably.
+              instance restarts. Set <code>SUPABASE_URL</code> +{" "}
+              <code>SUPABASE_SECRET_KEY</code> (+{" "}
+              <code>SUPABASE_STORAGE_BUCKET</code>) to store photography in
+              Supabase Storage, or <code>BLOB_READ_WRITE_TOKEN</code> for Vercel
+              Blob.
               Database: <code>{describeDatabaseTarget()}</code>.
             </span>
           </div>

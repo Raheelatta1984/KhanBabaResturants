@@ -38,16 +38,16 @@ async function connect() {
   ).trim();
   if (!url) {
     console.error(
-      "DATABASE_URL is not set. Add your Neon connection string to .env.local (or your shell) " +
-        "before using --publish/--list.",
+      "DATABASE_URL is not set. Add your Supabase pooler connection string to .env.local " +
+        "(or your shell) before using --publish/--list.",
     );
     process.exit(1);
   }
   // Reuse the app's own driver so `--publish` also works against PGlite (handy
   // for trying a note locally) and shares the schema/placeholder handling.
-  const { createNeonDb, createPgliteDb, isPgliteUrl } =
+  const { createPostgresDb, createPgliteDb, isPgliteUrl } =
     await import("../lib/db/driver");
-  return isPgliteUrl(url) ? createPgliteDb(url) : createNeonDb(url);
+  return isPgliteUrl(url) ? createPgliteDb(url) : createPostgresDb(url);
 }
 
 async function publish(entries) {

@@ -6,7 +6,7 @@
  *   npm run seed -- --reset   # delete every row first, then seed
  *
  * The app also self-seeds on its first request, so this script is only needed
- * when you want to prepare a Neon branch ahead of a deploy.
+ * when you want to prepare the Supabase database ahead of a deploy.
  */
 import { getDb } from "../lib/db";
 import { seedDatabase } from "../lib/db/seed";
@@ -18,7 +18,7 @@ async function main() {
   if (!process.env.DATABASE_URL && !process.env.POSTGRES_URL) {
     console.error(
       "DATABASE_URL is not set.\n" +
-        "Locally: copy .env.example to .env.local and paste your Neon connection string.\n" +
+        "Locally: copy .env.example to .env.local and paste your Supabase pooler connection string.\n" +
         "CI: `npm run test:pg` runs the whole suite against PGlite with no database at all.",
     );
     process.exit(1);

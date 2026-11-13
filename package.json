@@ -2,12 +2,13 @@
   "name": "khan-baba-platform",
   "version": "1.0.0",
   "private": true,
-  "description": "Khan Baba Restaurant \u2014 dynamic ordering, kitchen, delivery and manufacturing platform",
+  "description": "Khan Baba Restaurant — dynamic ordering, kitchen, delivery and manufacturing platform",
   "scripts": {
     "dev": "next dev -p 3000 -H 0.0.0.0",
     "build": "next build",
     "start": "next start -p 3000 -H 0.0.0.0",
     "seed": "tsx scripts/seed.ts",
+    "db:check": "tsx scripts/db-check.ts",
     "typecheck": "tsc --noEmit",
     "schema:build": "node scripts/generate-schema.mjs",
     "whatsnew": "tsx scripts/whats-new.mjs",
@@ -20,9 +21,9 @@
   "dependencies": {
     "@fontsource-variable/fraunces": "^5.2.9",
     "@fontsource-variable/inter": "^5.2.9",
-    "@neondatabase/serverless": "^1.0.2",
     "@vercel/blob": "^2.9.0",
     "next": "^15.5.29",
+    "pg": "^8.23.1",
     "qrcode": "^1.5.4",
     "react": "^19.3.1",
     "react-dom": "^19.3.1",
@@ -31,6 +32,7 @@
   "devDependencies": {
     "@electric-sql/pglite": "^0.3.13",
     "@types/node": "^24.10.1",
+    "@types/pg": "^8.23.1",
     "@types/qrcode": "^1.5.6",
     "@types/react": "^19.2.7",
     "@types/react-dom": "^19.2.3",

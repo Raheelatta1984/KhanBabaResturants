@@ -42,9 +42,18 @@ export default function Error({
         </h1>
         {database ? (
           <DatabaseSetupSteps
+            blank={
+              diagnosis.state === "database-missing" &&
+              diagnosis.reason === "blank-connection-string"
+            }
             detail={
               diagnosis.state === "database-unreachable"
                 ? diagnosis.detail
+                : undefined
+            }
+            hint={
+              diagnosis.state === "database-unreachable"
+                ? diagnosis.hint
                 : undefined
             }
           />
