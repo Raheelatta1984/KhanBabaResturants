@@ -10,14 +10,18 @@
     "seed": "tsx scripts/seed.ts",
     "typecheck": "tsc --noEmit",
     "schema:build": "node scripts/generate-schema.mjs",
-    "whatsnew": "node scripts/whats-new.mjs",
+    "whatsnew": "tsx scripts/whats-new.mjs",
     "prebuild": "node scripts/generate-schema.mjs",
-    "predev": "node scripts/generate-schema.mjs"
+    "predev": "node scripts/generate-schema.mjs",
+    "test:pg": "tsx scripts/test-pg.ts",
+    "test:smoke": "bash scripts/smoke.sh",
+    "test": "npm run typecheck && npm run test:pg && npm run test:smoke"
   },
   "dependencies": {
     "@fontsource-variable/fraunces": "^5.2.9",
     "@fontsource-variable/inter": "^5.2.9",
-    "better-sqlite3": "^12.4.1",
+    "@neondatabase/serverless": "^1.0.2",
+    "@vercel/blob": "^2.9.0",
     "next": "^15.5.29",
     "qrcode": "^1.5.4",
     "react": "^19.3.1",
@@ -25,7 +29,7 @@
     "zod": "^4.1.13"
   },
   "devDependencies": {
-    "@types/better-sqlite3": "^7.6.13",
+    "@electric-sql/pglite": "^0.3.13",
     "@types/node": "^24.10.1",
     "@types/qrcode": "^1.5.6",
     "@types/react": "^19.2.7",

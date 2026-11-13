@@ -1,6 +1,5 @@
 import fs from "node:fs";
-import path from "node:path";
-import { getUploadsDir } from "@/lib/db/paths";
+import { localUploadPath } from "@/lib/media";
 
 const TYPES: Record<string, string> = {
   jpg: "image/jpeg",
@@ -10,12 +9,19 @@ const TYPES: Record<string, string> = {
   avif: "image/avif",
 };
 
-/** Serves uploaded dish photography from the data directory. */
-export async function GET(_request: Request, context: { params: Promise<{ name: string }> }) {
+/**
+ * Serves locally-stored dish photography (the `local` media driver).
+ * Photos on Vercel Blob or Google Drive have absolute URLs and never come here.
+ */
+export async function GET(
+  _request: Request,
+  context: { params: Promise<{ name: string }> },
+) {
   const { name } = await context.params;
-  if (!/^[a-zA-Z0-9._-]+$/.test(name)) return new Response("Not found", { status: 404 });
+  if (!/^[a-zA-Z0-9._-]+$/.test(name))
+    return new Response("Not found", { status: 404 });
 
-  const file = path.join(getUploadsDir(), name);
+  const file = localUploadPath(name);
   if (!fs.existsSync(file)) return new Response("Not found", { status: 404 });
 
   const extension = name.split(".").pop()?.toLowerCase() ?? "";

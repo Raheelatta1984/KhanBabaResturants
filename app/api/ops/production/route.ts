@@ -36,7 +36,8 @@ type Body = {
 
 export async function POST(request: Request) {
   const session = await getApiSession(["admin", "manager", "kitchen"]);
-  if (!session) return NextResponse.json({ error: "Not authorised" }, { status: 401 });
+  if (!session)
+    return NextResponse.json({ error: "Not authorised" }, { status: 401 });
 
   let body: Body;
   try {
@@ -45,13 +46,13 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "Invalid request" }, { status: 400 });
   }
 
-  const db = getDb();
+  const db = await getDb();
 
   try {
     switch (body.action) {
       case "start": {
         if (!body.recipeId) throw new Error("Choose a recipe");
-        const batch = startBatch(db, {
+        const batch = await startBatch(db, {
           recipeId: Number(body.recipeId),
           plannedQty: Number(body.plannedQty ?? 0),
           actor: session.name,
@@ -61,12 +62,16 @@ export async function POST(request: Request) {
       }
       case "complete": {
         if (!body.batchId) throw new Error("Missing batch");
-        const result = completeBatch(db, Number(body.batchId), session.name);
+        const result = await completeBatch(
+          db,
+          Number(body.batchId),
+          session.name,
+        );
         return NextResponse.json({ ok: true, ...result });
       }
       case "cancel": {
         if (!body.batchId) throw new Error("Missing batch");
-        cancelBatch(db, Number(body.batchId));
+        await cancelBatch(db, Number(body.batchId));
         return NextResponse.json({ ok: true });
       }
       case "material": {
@@ -75,13 +80,13 @@ export async function POST(request: Request) {
         if (name.length < 2) throw new Error("Material name is required");
         const packQty = Number(material.packQty ?? 1);
         const packCostCents = Math.round(Number(material.packCost ?? 0) * 100);
-        if (packQty <= 0) throw new Error("Pack quantity must be greater than zero");
-        const info = db
-          .prepare(
-            `INSERT INTO materials (name, sku, unit, pack_qty, pack_cost_cents, stock_qty, reorder_level, supplier)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-          )
-          .run(
+        if (packQty <= 0)
+          throw new Error("Pack quantity must be greater than zero");
+        const id = await db.insert(
+          `INSERT INTO materials (name, sku, unit, pack_qty, pack_cost_cents, stock_qty, reorder_level, supplier)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+           RETURNING id`,
+          [
             name,
             (material.sku ?? "").trim() || null,
             (material.unit ?? "kg").trim(),
@@ -90,20 +95,21 @@ export async function POST(request: Request) {
             Number(material.stockQty ?? 0),
             Number(material.reorderLevel ?? 0),
             (material.supplier ?? "").trim() || null,
-          );
-        return NextResponse.json({ ok: true, id: Number(info.lastInsertRowid) }, { status: 201 });
+          ],
+        );
+        return NextResponse.json({ ok: true, id }, { status: 201 });
       }
       case "recipe": {
         const recipe = body.recipe ?? {};
         const name = (recipe.name ?? "").trim();
         if (name.length < 3) throw new Error("Recipe name is required");
-        if (!recipe.lines?.length) throw new Error("Add at least one material line");
-        const info = db
-          .prepare(
-            `INSERT INTO recipes (name, output_kind, menu_item_id, output_qty, output_unit, prep_minutes, notes)
-             VALUES (?, ?, ?, ?, ?, ?, ?)`,
-          )
-          .run(
+        if (!recipe.lines?.length)
+          throw new Error("Add at least one material line");
+        const recipeId = await db.insert(
+          `INSERT INTO recipes (name, output_kind, menu_item_id, output_qty, output_unit, prep_minutes, notes)
+           VALUES ($1, $2, $3, $4, $5, $6, $7)
+           RETURNING id`,
+          [
             name,
             recipe.outputKind === "menu_item" ? "menu_item" : "batch",
             recipe.menuItemId ?? null,
@@ -111,25 +117,33 @@ export async function POST(request: Request) {
             (recipe.outputUnit ?? "portion").trim(),
             Number(recipe.prepMinutes ?? 30),
             (recipe.notes ?? "").trim() || null,
-          );
-        const recipeId = Number(info.lastInsertRowid);
-        const insertLine = db.prepare("INSERT INTO recipe_lines (recipe_id, material_id, qty) VALUES (?, ?, ?)");
+          ],
+        );
         for (const line of recipe.lines) {
           if (!line.materialId || !(line.qty > 0)) continue;
-          insertLine.run(recipeId, line.materialId, line.qty);
+          await db.query(
+            "INSERT INTO recipe_lines (recipe_id, material_id, qty) VALUES ($1, $2, $3)",
+            [recipeId, line.materialId, line.qty],
+          );
         }
         return NextResponse.json({ ok: true, id: recipeId }, { status: 201 });
       }
       case "settings": {
         // kept for future production-specific settings
-        return NextResponse.json({ ok: true, cogsWindowDays: getSettingNumber("cogs_window_days", 30) });
+        return NextResponse.json({
+          ok: true,
+          cogsWindowDays: await getSettingNumber("cogs_window_days", 30),
+        });
       }
       default:
         return NextResponse.json({ error: "Unknown action" }, { status: 400 });
     }
   } catch (error) {
     return NextResponse.json(
-      { error: error instanceof Error ? error.message : "Production action failed" },
+      {
+        error:
+          error instanceof Error ? error.message : "Production action failed",
+      },
       { status: 400 },
     );
   }

@@ -29,19 +29,25 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "Invalid request" }, { status: 400 });
   }
 
-  const channel: Channel = body.channel && ["delivery", "pickup", "dine_in"].includes(body.channel) ? body.channel : "delivery";
-  const db = getDb();
+  const channel: Channel =
+    body.channel && ["delivery", "pickup", "dine_in"].includes(body.channel)
+      ? body.channel
+      : "delivery";
+  const db = await getDb();
 
   try {
-    const { subtotalCents } = priceCart(db, body.items ?? []);
+    const { subtotalCents } = await priceCart(db, body.items ?? []);
 
     if (channel === "delivery") {
-      const minOrder = getSettingNumber("delivery_min_order_cents", 2500);
+      const minOrder = await getSettingNumber("delivery_min_order_cents", 2500);
       if (subtotalCents < minOrder) {
-        return NextResponse.json({
-          error: `Delivery minimum is $${(minOrder / 100).toFixed(2)} — add a little more to your order.`,
-          shortfallCents: minOrder - subtotalCents,
-        }, { status: 422 });
+        return NextResponse.json(
+          {
+            error: `Delivery minimum is $${(minOrder / 100).toFixed(2)} — add a little more to your order.`,
+            shortfallCents: minOrder - subtotalCents,
+          },
+          { status: 422 },
+        );
       }
     }
 
@@ -68,11 +74,13 @@ export async function POST(request: Request) {
         etaMinutes: delivery.etaMinutes,
         expiresAt: delivery.expiresAt,
         live: delivery.live,
-        addressHash: addressHash(`${body.address ?? ""}|${body.suburb ?? ""}|${body.postcode ?? ""}`),
+        addressHash: addressHash(
+          `${body.address ?? ""}|${body.suburb ?? ""}|${body.postcode ?? ""}`,
+        ),
       });
     }
 
-    const pricing = computePricing(db, {
+    const pricing = await computePricing(db, {
       subtotalCents,
       channel,
       priority: Boolean(body.priority),
@@ -91,14 +99,19 @@ export async function POST(request: Request) {
             etaMinutes: delivery.etaMinutes,
             live: delivery.live,
             expiresAt: delivery.expiresAt,
-            fallbackReason: (delivery.raw as { fallbackReason?: string } | undefined)?.fallbackReason ?? null,
+            fallbackReason:
+              (delivery.raw as { fallbackReason?: string } | undefined)
+                ?.fallbackReason ?? null,
           }
         : null,
       addressRequired: channel === "delivery" && !hasAddress,
     });
   } catch (error) {
     return NextResponse.json(
-      { error: error instanceof Error ? error.message : "Could not price your order" },
+      {
+        error:
+          error instanceof Error ? error.message : "Could not price your order",
+      },
       { status: 400 },
     );
   }

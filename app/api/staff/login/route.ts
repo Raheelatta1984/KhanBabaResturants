@@ -1,7 +1,12 @@
 import { NextResponse } from "next/server";
 import { getDb } from "@/lib/db";
 import { verifyPassword } from "@/lib/auth/password";
-import { createSessionToken, SESSION_COOKIE, homeForRole, type Role } from "@/lib/auth/core";
+import {
+  createSessionToken,
+  SESSION_COOKIE,
+  homeForRole,
+  type Role,
+} from "@/lib/auth/core";
 
 export const dynamic = "force-dynamic";
 
@@ -37,22 +42,41 @@ export async function POST(request: Request) {
   const key = email || "unknown";
 
   if (throttled(key)) {
-    return NextResponse.json({ error: "Too many attempts. Try again in a few minutes." }, { status: 429 });
+    return NextResponse.json(
+      { error: "Too many attempts. Try again in a few minutes." },
+      { status: 429 },
+    );
   }
   if (!email || !password) {
-    return NextResponse.json({ error: "Enter your email and password" }, { status: 400 });
+    return NextResponse.json(
+      { error: "Enter your email and password" },
+      { status: 400 },
+    );
   }
 
-  const db = getDb();
-  const staff = db
-    .prepare("SELECT id, name, email, role, password_hash, active FROM staff WHERE lower(email) = ?")
-    .get(email) as
-    | { id: number; name: string; email: string; role: Role; password_hash: string; active: number }
-    | undefined;
+  const db = await getDb();
+  const staff = await db.maybeOne<{
+    id: number;
+    name: string;
+    email: string;
+    role: Role;
+    password_hash: string;
+    active: boolean;
+  }>(
+    "SELECT id, name, email, role, password_hash, active FROM staff WHERE lower(email) = $1",
+    [email],
+  );
 
-  if (!staff || !staff.active || !verifyPassword(password, staff.password_hash)) {
+  if (
+    !staff ||
+    !staff.active ||
+    !verifyPassword(password, staff.password_hash)
+  ) {
     recordFailure(key);
-    return NextResponse.json({ error: "Those details do not match an active staff account" }, { status: 401 });
+    return NextResponse.json(
+      { error: "Those details do not match an active staff account" },
+      { status: 401 },
+    );
   }
 
   const token = await createSessionToken({
@@ -62,7 +86,11 @@ export async function POST(request: Request) {
     role: staff.role,
   });
 
-  const response = NextResponse.json({ ok: true, role: staff.role, redirectTo: homeForRole(staff.role) });
+  const response = NextResponse.json({
+    ok: true,
+    role: staff.role,
+    redirectTo: homeForRole(staff.role),
+  });
   response.cookies.set({
     name: SESSION_COOKIE,
     value: token,

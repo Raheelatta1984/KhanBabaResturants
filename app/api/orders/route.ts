@@ -30,12 +30,19 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "Invalid request" }, { status: 400 });
   }
 
-  if (!body.items?.length) return NextResponse.json({ error: "Your cart is empty" }, { status: 400 });
-  if (body.paymentMethod && !["online", "counter"].includes(body.paymentMethod)) {
-    return NextResponse.json({ error: "Unknown payment method" }, { status: 400 });
+  if (!body.items?.length)
+    return NextResponse.json({ error: "Your cart is empty" }, { status: 400 });
+  if (
+    body.paymentMethod &&
+    !["online", "counter"].includes(body.paymentMethod)
+  ) {
+    return NextResponse.json(
+      { error: "Unknown payment method" },
+      { status: 400 },
+    );
   }
 
-  const db = getDb();
+  const db = await getDb();
   try {
     const result = await createOrder(db, {
       channel: body.channel ?? "delivery",
@@ -72,9 +79,15 @@ export async function POST(request: Request) {
     );
   } catch (error) {
     if (error instanceof OrderError) {
-      return NextResponse.json({ error: error.message }, { status: error.status });
+      return NextResponse.json(
+        { error: error.message },
+        { status: error.status },
+      );
     }
     console.error("createOrder failed", error);
-    return NextResponse.json({ error: "We could not place that order. Please try again." }, { status: 500 });
+    return NextResponse.json(
+      { error: "We could not place that order. Please try again." },
+      { status: 500 },
+    );
   }
 }

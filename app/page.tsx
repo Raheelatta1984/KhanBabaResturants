@@ -39,22 +39,46 @@ const SERVICES = [
 ];
 
 const STEPS = [
-  { title: "You order", body: "Delivery, pick-up or from your table — choose container size and heat level.", pct: 10 },
-  { title: "Counter confirms", body: "Our team accepts the ticket and it lands on the kitchen display instantly.", pct: 25 },
-  { title: "Kitchen cooks", body: "Every item is ticked off as it is prepared. You see the percentage climb.", pct: 65 },
-  { title: "Packed & dispatched", body: "Courier request is triggered with the live quote, or your table is served.", pct: 92 },
+  {
+    title: "You order",
+    body: "Delivery, pick-up or from your table — choose container size and heat level.",
+    pct: 10,
+  },
+  {
+    title: "Counter confirms",
+    body: "Our team accepts the ticket and it lands on the kitchen display instantly.",
+    pct: 25,
+  },
+  {
+    title: "Kitchen cooks",
+    body: "Every item is ticked off as it is prepared. You see the percentage climb.",
+    pct: 65,
+  },
+  {
+    title: "Packed & dispatched",
+    body: "Courier request is triggered with the live quote, or your table is served.",
+    pct: 92,
+  },
 ];
 
 export default async function HomePage() {
-  const db = getDb();
-  const featured = getFeaturedItems(db, 4);
-  const summary = menuSummary(db);
-  const reviews = getRecentReviews(db, 3);
-  const settings = getSettings();
-  const holidays = getUpcomingHolidays(db, 3);
-  const updates = db
-    .prepare("SELECT title, summary, category, published_at FROM whats_new ORDER BY pinned DESC, datetime(published_at) DESC LIMIT 3")
-    .all() as { title: string; summary: string; category: string; published_at: string }[];
+  const db = await getDb();
+  const [featured, summary, reviews, settings, holidays, updates] =
+    await Promise.all([
+      getFeaturedItems(db, 4),
+      menuSummary(db),
+      getRecentReviews(db, 3),
+      getSettings(),
+      getUpcomingHolidays(db, 3),
+      db.query<{
+        title: string;
+        summary: string;
+        category: string;
+        published_at: string;
+      }>(
+        "SELECT title, summary, category, published_at FROM whats_new ORDER BY pinned DESC, published_at DESC LIMIT 3",
+      ),
+    ]);
   const baseUrl = await getBaseUrl();
   const qrSvg = await QRCode.toString(`${baseUrl}/table/T04`, {
     type: "svg",
@@ -63,7 +87,11 @@ export default async function HomePage() {
     color: { dark: "#0a0908", light: "#ffffff" },
   });
   const cheapest = featured.length
-    ? Math.min(...featured.map((item) => Math.min(...item.variants.map((v) => v.priceCents))))
+    ? Math.min(
+        ...featured.map((item) =>
+          Math.min(...item.variants.map((v) => v.priceCents)),
+        ),
+      )
     : 0;
 
   const jsonLd = {
@@ -84,12 +112,19 @@ export default async function HomePage() {
     image: `${baseUrl}/images/feast.jpg`,
     url: baseUrl,
     acceptsReservations: true,
-    aggregateRating: { "@type": "AggregateRating", ratingValue: summary.rating, reviewCount: Math.max(summary.reviews, 8) },
+    aggregateRating: {
+      "@type": "AggregateRating",
+      ratingValue: summary.rating,
+      reviewCount: Math.max(summary.reviews, 8),
+    },
   };
 
   return (
     <>
-      <script type="application/ld+json" dangerouslySetInnerHTML={{ __html: JSON.stringify(jsonLd) }} />
+      <script
+        type="application/ld+json"
+        dangerouslySetInnerHTML={{ __html: JSON.stringify(jsonLd) }}
+      />
 
       <section className="hero">
         <div className="container hero-grid">
@@ -99,8 +134,9 @@ export default async function HomePage() {
               Same taste from Lahore to <em>Sydney</em>.
             </h1>
             <p className="hero-lede">
-              Biryani sealed on dum, karahi fired to order and naan straight from the tandoor — now ordered direct from
-              our kitchen. Delivery, click &amp; collect, dine-in or straight from your table.
+              Biryani sealed on dum, karahi fired to order and naan straight
+              from the tandoor — now ordered direct from our kitchen. Delivery,
+              click &amp; collect, dine-in or straight from your table.
             </p>
 
             <div className="hero-cta">
@@ -134,7 +170,10 @@ export default async function HomePage() {
 
           <div className="hero-visual">
             <div className="frame">
-              <img src="/images/feast.jpg" alt="A Khan Baba table spread of biryani, karahi and naan" />
+              <img
+                src="/images/feast.jpg"
+                alt="A Khan Baba table spread of biryani, karahi and naan"
+              />
             </div>
             <span className="hero-tag">
               <span className="live-dot" /> Kitchen live now
@@ -193,7 +232,10 @@ export default async function HomePage() {
           <div className="grid grid-3">
             {SERVICES.map((service, index) => (
               <Reveal key={service.title} delay={index * 80}>
-                <article className="card card-hover feature-card" style={{ height: "100%" }}>
+                <article
+                  className="card card-hover feature-card"
+                  style={{ height: "100%" }}
+                >
                   <span className="icon">
                     <Icon name={service.icon} size={20} />
                   </span>
@@ -211,16 +253,26 @@ export default async function HomePage() {
             <div className="notice" style={{ marginTop: 20 }}>
               <Icon name="shield" size={16} />
               <span>
-                Transparent pricing: a <b>5% weekend</b> and <b>10% public holiday</b> surcharge is shown line-by-line at
-                checkout. Priority preparation is optional for delivery and pick-up only — never for table guests.
-                {holidays[0] ? ` Next holiday: ${holidays[0].name} on ${formatDate(holidays[0].date)}.` : ""}
+                Transparent pricing: a <b>5% weekend</b> and{" "}
+                <b>10% public holiday</b> surcharge is shown line-by-line at
+                checkout. Priority preparation is optional for delivery and
+                pick-up only — never for table guests.
+                {holidays[0]
+                  ? ` Next holiday: ${holidays[0].name} on ${formatDate(holidays[0].date)}.`
+                  : ""}
               </span>
             </div>
           </Reveal>
         </div>
       </section>
 
-      <section className="section" style={{ background: "rgba(255,255,255,0.012)", borderBlock: "1px solid var(--line)" }}>
+      <section
+        className="section"
+        style={{
+          background: "rgba(255,255,255,0.012)",
+          borderBlock: "1px solid var(--line)",
+        }}
+      >
         <div className="container">
           <Reveal>
             <SectionHead
@@ -246,30 +298,69 @@ export default async function HomePage() {
 
       <section className="section" id="story">
         <div className="container">
-          <div className="grid grid-2" style={{ alignItems: "center", gap: "clamp(28px, 5vw, 64px)" }}>
+          <div
+            className="grid grid-2"
+            style={{ alignItems: "center", gap: "clamp(28px, 5vw, 64px)" }}
+          >
             <Reveal>
-              <div style={{ borderRadius: 24, overflow: "hidden", border: "1px solid var(--line-strong)", position: "relative" }}>
-                <img src="/images/interior-2.jpg" alt="Inside Khan Baba Restaurant in Sydney" style={{ aspectRatio: "5 / 4", objectFit: "cover" }} />
-                <div style={{ position: "absolute", bottom: 18, left: 18, background: "rgba(10,9,8,0.8)", backdropFilter: "blur(10px)", padding: "10px 14px", borderRadius: 12, border: "1px solid var(--line-strong)" }}>
+              <div
+                style={{
+                  borderRadius: 24,
+                  overflow: "hidden",
+                  border: "1px solid var(--line-strong)",
+                  position: "relative",
+                }}
+              >
+                <img
+                  src="/images/interior-2.jpg"
+                  alt="Inside Khan Baba Restaurant in Sydney"
+                  style={{ aspectRatio: "5 / 4", objectFit: "cover" }}
+                />
+                <div
+                  style={{
+                    position: "absolute",
+                    bottom: 18,
+                    left: 18,
+                    background: "rgba(10,9,8,0.8)",
+                    backdropFilter: "blur(10px)",
+                    padding: "10px 14px",
+                    borderRadius: 12,
+                    border: "1px solid var(--line-strong)",
+                  }}
+                >
                   <div className="tiny muted">Pitt Street, Sydney CBD</div>
-                  <div className="small strong">Open 7 days · Dine in & takeaway</div>
+                  <div className="small strong">
+                    Open 7 days · Dine in & takeaway
+                  </div>
                 </div>
               </div>
             </Reveal>
             <Reveal delay={100}>
               <span className="eyebrow">Our story</span>
-              <h2 style={{ margin: "16px 0 18px" }}>A decade of feeding Sydney, one karahi at a time.</h2>
+              <h2 style={{ margin: "16px 0 18px" }}>
+                A decade of feeding Sydney, one karahi at a time.
+              </h2>
               <p className="muted">
-                Khan Baba began with one tandoor and a family recipe book. Ten years on, we still cook the same way:
-                fresh ingredients, whole spices ground in-house, and everything made to order. What has changed is how
-                you get it.
+                Khan Baba began with one tandoor and a family recipe book. Ten
+                years on, we still cook the same way: fresh ingredients, whole
+                spices ground in-house, and everything made to order. What has
+                changed is how you get it.
               </p>
               <div className="grid grid-2" style={{ marginTop: 26, gap: 14 }}>
                 {[
-                  ["Fresh, never frozen", "Produce delivered daily from Flemington."],
-                  ["Halal certified", "Every cut sourced from certified suppliers."],
+                  [
+                    "Fresh, never frozen",
+                    "Produce delivered daily from Flemington.",
+                  ],
+                  [
+                    "Halal certified",
+                    "Every cut sourced from certified suppliers.",
+                  ],
                   ["Cooked to order", "No bain-maries, no reheating."],
-                  ["Direct pricing", "No aggregator commission baked into your bill."],
+                  [
+                    "Direct pricing",
+                    "No aggregator commission baked into your bill.",
+                  ],
                 ].map(([title, body]) => (
                   <div key={title} style={{ display: "flex", gap: 10 }}>
                     <span style={{ color: "var(--green)", marginTop: 2 }}>
@@ -287,7 +378,14 @@ export default async function HomePage() {
         </div>
       </section>
 
-      <section className="section" id="how" style={{ background: "var(--bg-soft)", borderBlock: "1px solid var(--line)" }}>
+      <section
+        className="section"
+        id="how"
+        style={{
+          background: "var(--bg-soft)",
+          borderBlock: "1px solid var(--line)",
+        }}
+      >
         <div className="container">
           <Reveal>
             <SectionHead
@@ -299,14 +397,25 @@ export default async function HomePage() {
           <div className="grid grid-4">
             {STEPS.map((step, index) => (
               <Reveal key={step.title} delay={index * 80}>
-                <div className="card" style={{ height: "100%", position: "relative" }}>
-                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                <div
+                  className="card"
+                  style={{ height: "100%", position: "relative" }}
+                >
+                  <div
+                    style={{
+                      display: "flex",
+                      justifyContent: "space-between",
+                      alignItems: "center",
+                    }}
+                  >
                     <span className="badge badge-amber">{step.pct}%</span>
                     <span className="tiny" style={{ color: "var(--muted-2)" }}>
                       0{index + 1}
                     </span>
                   </div>
-                  <h3 style={{ margin: "14px 0 8px", fontSize: "1.18rem" }}>{step.title}</h3>
+                  <h3 style={{ margin: "14px 0 8px", fontSize: "1.18rem" }}>
+                    {step.title}
+                  </h3>
                   <p className="small muted">{step.body}</p>
                 </div>
               </Reveal>
@@ -314,14 +423,30 @@ export default async function HomePage() {
           </div>
 
           <Reveal delay={140}>
-            <div className="card" style={{ marginTop: 22, display: "grid", gridTemplateColumns: "auto 1fr auto", gap: 24, alignItems: "center" }}>
-              <div className="qr-wrap" dangerouslySetInnerHTML={{ __html: qrSvg }} />
+            <div
+              className="card"
+              style={{
+                marginTop: 22,
+                display: "grid",
+                gridTemplateColumns: "auto 1fr auto",
+                gap: 24,
+                alignItems: "center",
+              }}
+            >
+              <div
+                className="qr-wrap"
+                dangerouslySetInnerHTML={{ __html: qrSvg }}
+              />
               <div>
                 <span className="eyebrow">At the table</span>
-                <h3 style={{ margin: "12px 0 8px" }}>Scan. Order. Watch it cook.</h3>
+                <h3 style={{ margin: "12px 0 8px" }}>
+                  Scan. Order. Watch it cook.
+                </h3>
                 <p className="small muted" style={{ maxWidth: "60ch" }}>
-                  Every table has its own QR code. Orders go to the counter for confirmation, then straight to the kitchen
-                  with a live completion percentage on your phone. Pay online or settle at the counter on your way out.
+                  Every table has its own QR code. Orders go to the counter for
+                  confirmation, then straight to the kitchen with a live
+                  completion percentage on your phone. Pay online or settle at
+                  the counter on your way out.
                 </p>
               </div>
               <Link href="/table/T04" className="btn btn-primary">
@@ -349,11 +474,28 @@ export default async function HomePage() {
           <div className="grid grid-3">
             {updates.map((update, index) => (
               <Reveal key={update.title} delay={index * 70}>
-                <Link href="/whats-new" className="card card-hover" style={{ display: "block", height: "100%" }}>
-                  <span className={`badge ${update.category === "feature" ? "badge-amber" : "badge-blue"}`}>{update.category}</span>
-                  <h3 style={{ margin: "14px 0 8px", fontSize: "1.16rem" }}>{update.title}</h3>
+                <Link
+                  href="/whats-new"
+                  className="card card-hover"
+                  style={{ display: "block", height: "100%" }}
+                >
+                  <span
+                    className={`badge ${update.category === "feature" ? "badge-amber" : "badge-blue"}`}
+                  >
+                    {update.category}
+                  </span>
+                  <h3 style={{ margin: "14px 0 8px", fontSize: "1.16rem" }}>
+                    {update.title}
+                  </h3>
                   <p className="small muted">{update.summary}</p>
-                  <span className="tiny" style={{ color: "var(--muted-2)", display: "block", marginTop: 14 }}>
+                  <span
+                    className="tiny"
+                    style={{
+                      color: "var(--muted-2)",
+                      display: "block",
+                      marginTop: 14,
+                    }}
+                  >
                     {formatDateTime(update.published_at)}
                   </span>
                 </Link>
@@ -370,11 +512,24 @@ export default async function HomePage() {
               <Reveal key={review.id} delay={index * 70}>
                 <figure className="card" style={{ height: "100%", margin: 0 }}>
                   <Stars rating={review.rating} />
-                  <blockquote style={{ margin: "12px 0 16px", fontFamily: "var(--font-display)", fontSize: "1.12rem", lineHeight: 1.4 }}>
+                  <blockquote
+                    style={{
+                      margin: "12px 0 16px",
+                      fontFamily: "var(--font-display)",
+                      fontSize: "1.12rem",
+                      lineHeight: 1.4,
+                    }}
+                  >
                     “{review.comment}”
                   </blockquote>
                   <figcaption className="tiny muted">
-                    {review.customer_name} · <Link href={`/menu/${review.slug}`} style={{ color: "var(--accent)" }}>{review.item_name}</Link>
+                    {review.customer_name} ·{" "}
+                    <Link
+                      href={`/menu/${review.slug}`}
+                      style={{ color: "var(--accent)" }}
+                    >
+                      {review.item_name}
+                    </Link>
                   </figcaption>
                 </figure>
               </Reveal>
@@ -402,10 +557,13 @@ export default async function HomePage() {
             >
               <div>
                 <span className="eyebrow">Hungry yet?</span>
-                <h2 style={{ margin: "12px 0 8px" }}>Order direct. Skip the commission.</h2>
+                <h2 style={{ margin: "12px 0 8px" }}>
+                  Order direct. Skip the commission.
+                </h2>
                 <p className="muted small" style={{ maxWidth: "52ch" }}>
-                  Ordering straight from us means better prices, a real kitchen tracking your food and a courier quote you
-                  can see before you pay.
+                  Ordering straight from us means better prices, a real kitchen
+                  tracking your food and a courier quote you can see before you
+                  pay.
                 </p>
               </div>
               <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>

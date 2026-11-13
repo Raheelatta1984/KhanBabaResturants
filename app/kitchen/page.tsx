@@ -1,7 +1,12 @@
 import Link from "next/link";
 import { requireRole } from "@/lib/auth/guard";
 import { getDb } from "@/lib/db";
-import { getOrderItems, listOrders, type OrderRow } from "@/lib/orders";
+import {
+  getOrderItems,
+  listOrders,
+  type OrderItemRow,
+  type OrderRow,
+} from "@/lib/orders";
 import { CHANNEL_LABELS } from "@/lib/pricing";
 import { cogsTotals, lowStockMaterials } from "@/lib/production";
 import { minutesSince } from "@/lib/time";
@@ -15,11 +20,19 @@ import { StatusBadge } from "@/components/ui";
 
 export const dynamic = "force-dynamic";
 
-function Ticket({ order, focus }: { order: OrderRow; focus: string }) {
-  const db = getDb();
-  const items = getOrderItems(db, order.id);
+function Ticket({
+  order,
+  items,
+  focus,
+}: {
+  order: OrderRow;
+  items: OrderItemRow[];
+  focus: string;
+}) {
   const readyCount = items.filter((item) => item.prep_state === "ready").length;
-  const elapsed = minutesSince(order.kitchen_started_at ?? order.confirmed_at ?? order.created_at);
+  const elapsed = minutesSince(
+    order.kitchen_started_at ?? order.confirmed_at ?? order.created_at,
+  );
   const isLate = elapsed > 25;
   const allReady = readyCount === items.length;
 
@@ -28,7 +41,8 @@ function Ticket({ order, focus }: { order: OrderRow; focus: string }) {
       className={`ticket ${order.channel}`}
       style={{
         borderColor: order.code === focus ? "rgba(243,171,63,0.65)" : undefined,
-        boxShadow: order.code === focus ? "0 0 0 2px rgba(243,171,63,0.18)" : undefined,
+        boxShadow:
+          order.code === focus ? "0 0 0 2px rgba(243,171,63,0.18)" : undefined,
       }}
     >
       <div className="ticket-head">
@@ -37,29 +51,55 @@ function Ticket({ order, focus }: { order: OrderRow; focus: string }) {
           <div className="ticket-meta">
             <span>{CHANNEL_LABELS[order.channel]}</span>
             {order.table_id ? <span>Table</span> : null}
-            <span style={{ color: isLate ? "var(--red)" : undefined }}>{elapsed} min</span>
-            {order.priority ? <span className="badge badge-amber" style={{ padding: "1px 6px" }}>Priority</span> : null}
+            <span style={{ color: isLate ? "var(--red)" : undefined }}>
+              {elapsed} min
+            </span>
+            {order.priority ? (
+              <span
+                className="badge badge-amber"
+                style={{ padding: "1px 6px" }}
+              >
+                Priority
+              </span>
+            ) : null}
           </div>
         </div>
-        <span className="badge badge-muted">{readyCount}/{items.length}</span>
+        <span className="badge badge-muted">
+          {readyCount}/{items.length}
+        </span>
       </div>
 
       <div className="ticket-items">
         {items.map((item) => (
-          <div key={item.id} style={{ borderTop: "1px solid var(--line)", paddingTop: 6 }}>
+          <div
+            key={item.id}
+            style={{ borderTop: "1px solid var(--line)", paddingTop: 6 }}
+          >
             <div className="ticket-item">
               <span className="qty">{item.qty}×</span>
               <span className="nm">{item.name}</span>
               <span className="sz">{item.variant_label}</span>
             </div>
-            <div style={{ display: "flex", gap: 6, alignItems: "center", marginTop: 4, paddingLeft: 26 }}>
+            <div
+              style={{
+                display: "flex",
+                gap: 6,
+                alignItems: "center",
+                marginTop: 4,
+                paddingLeft: 26,
+              }}
+            >
               <span className="sz" style={{ minWidth: 64 }}>
                 {item.spice_level ? item.spice_level.replace("_", " ") : "—"}
               </span>
               <div className="prep-toggle">
                 <OpsButton
                   endpoint={`/api/ops/orders/${order.id}`}
-                  payload={{ action: "item", itemId: item.id, state: "preparing" }}
+                  payload={{
+                    action: "item",
+                    itemId: item.id,
+                    state: "preparing",
+                  }}
                   className="btn btn-ghost"
                   title="Start this item"
                 >
@@ -74,16 +114,34 @@ function Ticket({ order, focus }: { order: OrderRow; focus: string }) {
                   Done
                 </OpsButton>
               </div>
-              <span className={`badge ${item.prep_state === "ready" ? "badge-green" : item.prep_state === "preparing" ? "badge-amber" : "badge-muted"}`} style={{ marginLeft: "auto" }}>
+              <span
+                className={`badge ${item.prep_state === "ready" ? "badge-green" : item.prep_state === "preparing" ? "badge-amber" : "badge-muted"}`}
+                style={{ marginLeft: "auto" }}
+              >
                 {item.prep_state}
               </span>
             </div>
-            {item.notes ? <div className="tiny" style={{ color: "var(--accent)", paddingLeft: 26, marginTop: 3 }}>{item.notes}</div> : null}
+            {item.notes ? (
+              <div
+                className="tiny"
+                style={{
+                  color: "var(--accent)",
+                  paddingLeft: 26,
+                  marginTop: 3,
+                }}
+              >
+                {item.notes}
+              </div>
+            ) : null}
           </div>
         ))}
       </div>
 
-      {order.notes ? <div className="tiny muted" style={{ marginBottom: 8 }}>Note: {order.notes}</div> : null}
+      {order.notes ? (
+        <div className="tiny muted" style={{ marginBottom: 8 }}>
+          Note: {order.notes}
+        </div>
+      ) : null}
 
       <div className="ticket-actions">
         <OpsButton
@@ -94,7 +152,11 @@ function Ticket({ order, focus }: { order: OrderRow; focus: string }) {
         >
           <Icon name="check" size={13} /> Bump ticket
         </OpsButton>
-        <Link href={`/order/${order.code}`} className="btn btn-ghost btn-sm" target="_blank">
+        <Link
+          href={`/order/${order.code}`}
+          className="btn btn-ghost btn-sm"
+          target="_blank"
+        >
           Customer view
         </Link>
       </div>
@@ -102,32 +164,75 @@ function Ticket({ order, focus }: { order: OrderRow; focus: string }) {
   );
 }
 
-export default async function KitchenPage({ searchParams }: { searchParams: Promise<{ focus?: string }> }) {
+export default async function KitchenPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ focus?: string }>;
+}) {
   const session = await requireRole(["admin", "manager", "kitchen"]);
   const { focus } = await searchParams;
-  const db = getDb();
+  const db = await getDb();
 
-  const queued = listOrders(db, { status: ["confirmed"], limit: 30 });
-  const cooking = listOrders(db, { status: ["preparing"], limit: 30 });
-  const packed = listOrders(db, { status: ["ready", "awaiting_collection"], limit: 20 });
-  const recipes = db
-    .prepare("SELECT id, name, output_unit, prep_minutes FROM recipes WHERE active = 1 ORDER BY name")
-    .all() as { id: number; name: string; output_unit: string; prep_minutes: number }[];
-  const batches = db
-    .prepare(
-      `SELECT b.id, b.ref, b.planned_qty, b.started_at, b.notes, r.name AS recipe_name, r.output_unit
+  const [queued, cooking, packed, recipes, batches, cogs, lowStock] =
+    await Promise.all([
+      listOrders(db, { status: ["confirmed"], limit: 30 }),
+      listOrders(db, { status: ["preparing"], limit: 30 }),
+      listOrders(db, { status: ["ready", "awaiting_collection"], limit: 20 }),
+      db.query<{
+        id: number;
+        name: string;
+        output_unit: string;
+        prep_minutes: number;
+      }>(
+        "SELECT id, name, output_unit, prep_minutes FROM recipes WHERE active ORDER BY name",
+      ),
+      db.query<{
+        id: number;
+        ref: string;
+        planned_qty: number;
+        started_at: string;
+        notes: string | null;
+        recipe_name: string;
+        output_unit: string;
+      }>(
+        `SELECT b.id, b.ref, b.planned_qty, b.started_at, b.notes, r.name AS recipe_name, r.output_unit
        FROM production_batches b JOIN recipes r ON r.id = b.recipe_id
        WHERE b.status = 'in_progress' ORDER BY b.id DESC LIMIT 8`,
-    )
-    .all() as { id: number; ref: string; planned_qty: number; started_at: string; notes: string | null; recipe_name: string; output_unit: string }[];
-  const cogs = cogsTotals(db, 1);
-  const lowStock = lowStockMaterials(db, 4);
+      ),
+      cogsTotals(db, 1),
+      lowStockMaterials(db, 4),
+    ]);
 
   const columns = [
-    { key: "queued", title: "Queue", orders: queued, hint: "Accepted at counter" },
-    { key: "cooking", title: "On the fire", orders: cooking, hint: "In preparation" },
-    { key: "packed", title: "Packed / ready", orders: packed, hint: "Awaiting pickup or courier" },
+    {
+      key: "queued",
+      title: "Queue",
+      orders: queued,
+      hint: "Accepted at counter",
+    },
+    {
+      key: "cooking",
+      title: "On the fire",
+      orders: cooking,
+      hint: "In preparation",
+    },
+    {
+      key: "packed",
+      title: "Packed / ready",
+      orders: packed,
+      hint: "Awaiting pickup or courier",
+    },
   ];
+
+  // One batch fetch for every ticket's items (one round trip per order, in parallel).
+  const ticketItems = new Map<number, OrderItemRow[]>();
+  await Promise.all(
+    columns.flatMap((column) =>
+      column.orders.map(async (order) => {
+        ticketItems.set(order.id, await getOrderItems(db, order.id));
+      }),
+    ),
+  );
 
   return (
     <div className="portal">
@@ -137,10 +242,15 @@ export default async function KitchenPage({ searchParams }: { searchParams: Prom
         <div className="page-head">
           <div>
             <h1>Kitchen display</h1>
-            <p>Orders auto-route here once the counter accepts. Tick items as they are prepared — customers see the same percentage.</p>
+            <p>
+              Orders auto-route here once the counter accepts. Tick items as
+              they are prepared — customers see the same percentage.
+            </p>
           </div>
           <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-            <span className="badge badge-amber">{queued.length + cooking.length} open tickets</span>
+            <span className="badge badge-amber">
+              {queued.length + cooking.length} open tickets
+            </span>
             <Link href="/counter" className="btn btn-ghost btn-sm">
               Counter
             </Link>
@@ -153,16 +263,28 @@ export default async function KitchenPage({ searchParams }: { searchParams: Prom
               <header>
                 <div>
                   <h3>{column.title}</h3>
-                  <div className="tiny" style={{ color: "var(--muted-2)" }}>{column.hint}</div>
+                  <div className="tiny" style={{ color: "var(--muted-2)" }}>
+                    {column.hint}
+                  </div>
                 </div>
                 <span className="queue-count">{column.orders.length}</span>
               </header>
               {column.orders.length === 0 ? (
-                <div className="tiny" style={{ color: "var(--muted-2)", padding: "20px 4px" }}>
+                <div
+                  className="tiny"
+                  style={{ color: "var(--muted-2)", padding: "20px 4px" }}
+                >
                   Nothing here.
                 </div>
               ) : (
-                column.orders.map((order) => <Ticket key={order.id} order={order} focus={focus ?? ""} />)
+                column.orders.map((order) => (
+                  <Ticket
+                    key={order.id}
+                    order={order}
+                    items={ticketItems.get(order.id) ?? []}
+                    focus={focus ?? ""}
+                  />
+                ))
               )}
             </section>
           ))}
@@ -173,7 +295,9 @@ export default async function KitchenPage({ searchParams }: { searchParams: Prom
             <h3>
               <Icon name="box" size={16} /> Production — naan, roti &amp; prep
             </h3>
-            <span className="tiny muted">Material costs are lodged as each batch is completed</span>
+            <span className="tiny muted">
+              Material costs are lodged as each batch is completed
+            </span>
           </div>
 
           <StartBatchForm recipes={recipes} />
@@ -210,7 +334,10 @@ export default async function KitchenPage({ searchParams }: { searchParams: Prom
                           <div style={{ display: "flex", gap: 6 }}>
                             <OpsButton
                               endpoint="/api/ops/production"
-                              payload={{ action: "complete", batchId: batch.id }}
+                              payload={{
+                                action: "complete",
+                                batchId: batch.id,
+                              }}
                               className="btn btn-green btn-sm"
                               confirmMessage="Complete this batch and post material costs?"
                               successMessage="Batch completed — costs posted"
@@ -243,8 +370,17 @@ export default async function KitchenPage({ searchParams }: { searchParams: Prom
             </div>
             <div className="stat-card" style={{ gridColumn: "span 2" }}>
               <span>Low stock</span>
-              <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 6 }}>
-                {lowStock.length === 0 ? <small>Everything above reorder level.</small> : null}
+              <div
+                style={{
+                  display: "flex",
+                  gap: 8,
+                  flexWrap: "wrap",
+                  marginTop: 6,
+                }}
+              >
+                {lowStock.length === 0 ? (
+                  <small>Everything above reorder level.</small>
+                ) : null}
                 {lowStock.map((material) => (
                   <span key={material.id} className="badge badge-red">
                     {material.name}: {material.stock_qty}
@@ -259,8 +395,9 @@ export default async function KitchenPage({ searchParams }: { searchParams: Prom
         <div className="notice" style={{ marginTop: 18 }}>
           <Icon name="sparkle" size={15} />
           <span>
-            Kitchen screen tip: mark individual items as you plate them. The customer progress bar moves from 20% to 78%
-            as items are ticked, then hits 85% when the ticket is bumped.
+            Kitchen screen tip: mark individual items as you plate them. The
+            customer progress bar moves from 20% to 78% as items are ticked,
+            then hits 85% when the ticket is bumped.
           </span>
         </div>
       </main>

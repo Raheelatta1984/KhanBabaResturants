@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { getDb } from "@/lib/db";
+import { getDb, type Db } from "@/lib/db";
 import { getApiSession } from "@/lib/auth/api";
 import { parseYouTubeId } from "@/lib/youtube";
 
@@ -43,7 +43,12 @@ type Body = {
 };
 
 const SPICE_ORDER = ["blend", "mild", "hot", "extra_hot"];
-const TOGGLE_FIELDS = new Set(["is_available", "is_featured", "is_new", "published"]);
+const TOGGLE_FIELDS = new Set([
+  "is_available",
+  "is_featured",
+  "is_new",
+  "published",
+]);
 
 function slugify(value: string): string {
   return value
@@ -53,11 +58,18 @@ function slugify(value: string): string {
     .slice(0, 60);
 }
 
-function uniqueSlug(db: ReturnType<typeof getDb>, base: string, ignoreId?: number): string {
+async function uniqueSlug(
+  db: Db,
+  base: string,
+  ignoreId?: number,
+): Promise<string> {
   let slug = base || "dish";
   let counter = 1;
   while (true) {
-    const row = db.prepare("SELECT id FROM menu_items WHERE slug = ?").get(slug) as { id: number } | undefined;
+    const row = await db.maybeOne<{ id: number }>(
+      "SELECT id FROM menu_items WHERE slug = $1",
+      [slug],
+    );
     if (!row || row.id === ignoreId) return slug;
     counter += 1;
     slug = `${base}-${counter}`;
@@ -66,7 +78,8 @@ function uniqueSlug(db: ReturnType<typeof getDb>, base: string, ignoreId?: numbe
 
 export async function POST(request: Request) {
   const session = await getApiSession(["admin", "manager"]);
-  if (!session) return NextResponse.json({ error: "Not authorised" }, { status: 401 });
+  if (!session)
+    return NextResponse.json({ error: "Not authorised" }, { status: 401 });
 
   let body: Body;
   try {
@@ -75,7 +88,7 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "Invalid request" }, { status: 400 });
   }
 
-  const db = getDb();
+  const db = await getDb();
 
   if (body.action === "toggle") {
     const id = Number(body.id);
@@ -83,43 +96,64 @@ export async function POST(request: Request) {
     if (!Number.isInteger(id) || !TOGGLE_FIELDS.has(field)) {
       return NextResponse.json({ error: "Invalid toggle" }, { status: 400 });
     }
-    const current = db.prepare(`SELECT ${field} AS value FROM menu_items WHERE id = ?`).get(id) as
-      | { value: number }
-      | undefined;
-    if (!current) return NextResponse.json({ error: "Dish not found" }, { status: 404 });
-    db.prepare(`UPDATE menu_items SET ${field} = ?, updated_at = datetime('now') WHERE id = ?`).run(
-      current.value ? 0 : 1,
-      id,
+    // `field` is checked against an allow-list above, so it cannot be injected.
+    const current = await db.maybeOne<{ value: boolean }>(
+      `SELECT ${field} AS value FROM menu_items WHERE id = $1`,
+      [id],
     );
-    return NextResponse.json({ ok: true, value: current.value ? 0 : 1 });
+    if (!current)
+      return NextResponse.json({ error: "Dish not found" }, { status: 404 });
+    await db.query(
+      `UPDATE menu_items SET ${field} = $1, updated_at = now() WHERE id = $2`,
+      [!current.value, id],
+    );
+    return NextResponse.json({ ok: true, value: !current.value });
   }
 
   if (body.action === "delete") {
     const id = Number(body.id);
-    if (!Number.isInteger(id)) return NextResponse.json({ error: "Invalid dish" }, { status: 400 });
-    db.prepare("DELETE FROM menu_items WHERE id = ?").run(id);
+    if (!Number.isInteger(id))
+      return NextResponse.json({ error: "Invalid dish" }, { status: 400 });
+    await db.query("DELETE FROM menu_items WHERE id = $1", [id]);
     return NextResponse.json({ ok: true });
   }
 
   // ---- save (create or update) ----
   const item = body.item ?? {};
   const name = (item.name ?? "").trim();
-  if (name.length < 2) return NextResponse.json({ error: "Dish name is required" }, { status: 400 });
+  if (name.length < 2)
+    return NextResponse.json(
+      { error: "Dish name is required" },
+      { status: 400 },
+    );
 
-  const variants = (body.variants ?? []).filter((variant) => (variant.priceCents ?? 0) >= 0 && variant.label?.trim());
-  if (variants.length === 0) return NextResponse.json({ error: "Add at least one size / price" }, { status: 400 });
+  const variants = (body.variants ?? []).filter(
+    (variant) => (variant.priceCents ?? 0) >= 0 && variant.label?.trim(),
+  );
+  if (variants.length === 0)
+    return NextResponse.json(
+      { error: "Add at least one size / price" },
+      { status: 400 },
+    );
   if (variants.some((variant) => !(Number(variant.priceCents) > 0))) {
-    return NextResponse.json({ error: "Each size needs a price above zero" }, { status: 400 });
+    return NextResponse.json(
+      { error: "Each size needs a price above zero" },
+      { status: 400 },
+    );
   }
 
-  const spiceLevels = SPICE_ORDER.filter((level) => (item.spiceLevels ?? []).includes(level)).join(",");
+  const spiceLevels = SPICE_ORDER.filter((level) =>
+    (item.spiceLevels ?? []).includes(level),
+  ).join(",");
   const youtubeId = parseYouTubeId(item.youtube);
   const image = (item.image ?? "").trim() || "/images/biryani-chicken.jpg";
-  const gallery = JSON.stringify(Array.isArray(item.gallery) ? item.gallery.filter(Boolean).slice(0, 8) : []);
+  const gallery = JSON.stringify(
+    Array.isArray(item.gallery) ? item.gallery.filter(Boolean).slice(0, 8) : [],
+  );
 
   const id = Number(body.id ?? 0);
   const baseSlug = slugify(item.slug || name);
-  const slug = uniqueSlug(db, baseSlug, id || undefined);
+  const slug = await uniqueSlug(db, baseSlug, id || undefined);
 
   const payload = [
     name,
@@ -134,72 +168,99 @@ export async function POST(request: Request) {
     (item.allergens ?? "").trim(),
     spiceLevels,
     Number(item.prepMinutes ?? 15),
-    item.isVeg ? 1 : 0,
-    item.isAvailable === false ? 0 : 1,
-    item.isFeatured ? 1 : 0,
-    item.isNew ? 1 : 0,
-    item.published === false ? 0 : 1,
+    Boolean(item.isVeg),
+    item.isAvailable !== false,
+    Boolean(item.isFeatured),
+    Boolean(item.isNew),
+    item.published !== false,
     Number(item.sortOrder ?? 100),
   ];
 
   try {
-    const tx = db.transaction(() => {
+    const savedId = await db.transaction(async (tx) => {
       let itemId = id;
       if (itemId) {
-        db.prepare(
-          `UPDATE menu_items SET name=?, slug=?, tagline=?, description=?, category_id=?, image=?, gallery=?,
-             youtube_id=?, ingredients=?, allergens=?, spice_levels=?, prep_minutes=?, is_veg=?, is_available=?,
-             is_featured=?, is_new=?, published=?, sort_order=?, updated_at=datetime('now')
-           WHERE id = ?`,
-        ).run(...payload, itemId);
+        await tx.query(
+          `UPDATE menu_items SET name=$1, slug=$2, tagline=$3, description=$4, category_id=$5, image=$6, gallery=$7,
+             youtube_id=$8, ingredients=$9, allergens=$10, spice_levels=$11, prep_minutes=$12, is_veg=$13,
+             is_available=$14, is_featured=$15, is_new=$16, published=$17, sort_order=$18, updated_at=now()
+           WHERE id = $19`,
+          [...payload, itemId],
+        );
       } else {
-        const info = db
-          .prepare(
-            `INSERT INTO menu_items (name, slug, tagline, description, category_id, image, gallery, youtube_id,
-               ingredients, allergens, spice_levels, prep_minutes, is_veg, is_available, is_featured, is_new,
-               published, sort_order)
-             VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-          )
-          .run(...payload);
-        itemId = Number(info.lastInsertRowid);
+        itemId = await tx.insert(
+          `INSERT INTO menu_items (name, slug, tagline, description, category_id, image, gallery, youtube_id,
+             ingredients, allergens, spice_levels, prep_minutes, is_veg, is_available, is_featured, is_new,
+             published, sort_order)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18)
+           RETURNING id`,
+          payload,
+        );
       }
 
       const keptIds: number[] = [];
-      variants.forEach((variant, index) => {
+      for (const [index, variant] of variants.entries()) {
         const price = Math.round(Number(variant.priceCents));
-        const isDefault = variant.isDefault || index === 0 ? 1 : 0;
+        const isDefault = Boolean(variant.isDefault || index === 0);
         if (variant.id) {
-          db.prepare(
-            "UPDATE item_variants SET label=?, size_ml=?, price_cents=?, is_default=?, active=1, sort_order=? WHERE id=? AND item_id=?",
-          ).run(variant.label!.trim(), variant.sizeMl ?? null, price, isDefault, index, variant.id, itemId);
+          await tx.query(
+            `UPDATE item_variants SET label=$1, size_ml=$2, price_cents=$3, is_default=$4, active=TRUE, sort_order=$5
+             WHERE id=$6 AND item_id=$7`,
+            [
+              variant.label!.trim(),
+              variant.sizeMl ?? null,
+              price,
+              isDefault,
+              index,
+              variant.id,
+              itemId,
+            ],
+          );
           keptIds.push(variant.id);
         } else {
-          const info = db
-            .prepare(
-              "INSERT INTO item_variants (item_id, label, size_ml, price_cents, is_default, sort_order) VALUES (?,?,?,?,?,?)",
-            )
-            .run(itemId, variant.label!.trim(), variant.sizeMl ?? null, price, isDefault, index);
-          keptIds.push(Number(info.lastInsertRowid));
+          const variantId = await tx.insert(
+            `INSERT INTO item_variants (item_id, label, size_ml, price_cents, is_default, sort_order)
+             VALUES ($1,$2,$3,$4,$5,$6) RETURNING id`,
+            [
+              itemId,
+              variant.label!.trim(),
+              variant.sizeMl ?? null,
+              price,
+              isDefault,
+              index,
+            ],
+          );
+          keptIds.push(variantId);
         }
-      });
+      }
       // Deactivate variants removed from the editor (history keeps name/price snapshots)
-      const placeholders = keptIds.map(() => "?").join(",");
-      db.prepare(`UPDATE item_variants SET active = 0 WHERE item_id = ? AND id NOT IN (${placeholders})`).run(
-        itemId,
-        ...keptIds,
+      await tx.query(
+        "UPDATE item_variants SET active = FALSE WHERE item_id = $1 AND NOT (id = ANY($2::int[]))",
+        [itemId, keptIds],
       );
       // ensure exactly one default
       if (!variants.some((variant) => variant.isDefault) && keptIds[0]) {
-        db.prepare("UPDATE item_variants SET is_default = 0 WHERE item_id = ?").run(itemId);
-        db.prepare("UPDATE item_variants SET is_default = 1 WHERE id = ?").run(keptIds[0]);
+        await tx.query(
+          "UPDATE item_variants SET is_default = FALSE WHERE item_id = $1",
+          [itemId],
+        );
+        await tx.query(
+          "UPDATE item_variants SET is_default = TRUE WHERE id = $1",
+          [keptIds[0]],
+        );
       }
       return itemId;
     });
 
-    const savedId = tx();
-    return NextResponse.json({ ok: true, id: savedId, slug }, { status: id ? 200 : 201 });
+    return NextResponse.json(
+      { ok: true, id: savedId, slug },
+      { status: id ? 200 : 201 },
+    );
   } catch (error) {
     console.error("menu save failed", error);
-    return NextResponse.json({ error: "Could not save this dish" }, { status: 500 });
+    return NextResponse.json(
+      { error: "Could not save this dish" },
+      { status: 500 },
+    );
   }
 }

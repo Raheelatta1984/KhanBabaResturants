@@ -2,18 +2,18 @@ import path from "node:path";
 
 /** @type {import('next').NextConfig} */
 const nextConfig = {
-  serverExternalPackages: ["better-sqlite3"],
+  // Loaded only when DATABASE_URL points at PGlite (CI / local tests); keeping it
+  // external stops the 7 MB wasm engine from being traced into every function.
+  serverExternalPackages: ["@electric-sql/pglite"],
   images: { unoptimized: true },
-  // better-sqlite3 is a native addon; make sure the .node binary is traced into
-  // the serverless bundle (Vercel strips unknown binaries otherwise).
-  outputFileTracingIncludes: {
-    "/**/*": ["./node_modules/better-sqlite3/**/*"],
-  },
   poweredByHeader: false,
-  // TypeScript 7 removed `baseUrl`, so the "@/" alias is wired up explicitly.
+  // TypeScript 7 removed `baseUrl`, so the "@/"" alias is wired up explicitly.
   turbopack: { resolveAlias: { "@/*": "./*" } },
   webpack: (config) => {
-    config.resolve.alias = { ...(config.resolve.alias ?? {}), "@": path.resolve(process.cwd()) };
+    config.resolve.alias = {
+      ...(config.resolve.alias ?? {}),
+      "@": path.resolve(process.cwd()),
+    };
     return config;
   },
   async headers() {
