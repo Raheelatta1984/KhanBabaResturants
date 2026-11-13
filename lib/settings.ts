@@ -79,6 +79,24 @@ export async function getSettingNumber(
   return Number.isFinite(value) ? value : fallback;
 }
 
+/**
+ * Settings that never touch the database.
+ *
+ * The root layout only needs the restaurant's name/address/phone for the header
+ * and footer. Asking the database for them meant that a missing or unreachable
+ * `DATABASE_URL` took the entire site down with an opaque "server-side
+ * exception" — including the pages that would have explained the problem. The
+ * layout now renders from these defaults and the pages themselves report the
+ * database state.
+ */
+export const BRAND_SETTINGS: Record<string, string> = {
+  restaurant_name: DEFAULT_SETTINGS.restaurant_name,
+  restaurant_address: DEFAULT_SETTINGS.restaurant_address,
+  restaurant_phone: DEFAULT_SETTINGS.restaurant_phone,
+  restaurant_email: DEFAULT_SETTINGS.restaurant_email,
+  restaurant_hours: DEFAULT_SETTINGS.restaurant_hours,
+};
+
 export async function getSettings(): Promise<Record<string, string>> {
   const db = await getDb();
   const cached = cache.get(db);

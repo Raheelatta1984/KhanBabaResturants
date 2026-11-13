@@ -4,7 +4,7 @@ import "@fontsource-variable/fraunces";
 import "./globals.css";
 import { CartProvider } from "@/components/CartProvider";
 import { SiteChrome } from "@/components/SiteChrome";
-import { getSettings } from "@/lib/settings";
+import { BRAND_SETTINGS } from "@/lib/settings";
 
 export const metadata: Metadata = {
   title: {
@@ -30,12 +30,14 @@ export const viewport: Viewport = {
   initialScale: 1,
 };
 
-export default async function RootLayout({
+export default function RootLayout({
   children,
 }: {
   children: React.ReactNode;
 }) {
-  const settings = await getSettings();
+  // Intentionally database-free: the chrome must render even when the database
+  // is unreachable, so the error pages inside it can explain what to fix.
+  const settings = BRAND_SETTINGS;
   const restaurant = {
     name: settings.restaurant_name,
     address: settings.restaurant_address,
