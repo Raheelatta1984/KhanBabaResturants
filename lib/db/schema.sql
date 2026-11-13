@@ -1,4 +1,4 @@
--- Khan Baba platform schema (PostgreSQL / Neon).
+-- Khan Baba platform schema (PostgreSQL / Supabase).
 --
 -- Applied automatically on the first query of every process (see lib/db/index.ts):
 -- every statement is idempotent, so this file doubles as the migration script.

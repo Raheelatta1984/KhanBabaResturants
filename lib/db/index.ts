@@ -1,14 +1,20 @@
 import { unstable_noStore } from "next/cache";
 import fs from "node:fs";
 import path from "node:path";
-import { createNeonDb, createPgliteDb, isPgliteUrl, type Db } from "./driver";
+import {
+  createPgliteDb,
+  createPostgresDb,
+  isPgliteUrl,
+  isSupabasePooler,
+  type Db,
+} from "./driver";
 import { SCHEMA_SQL } from "./schema";
 import { seedDatabase } from "./seed";
 
 export type { Db, Row, Sql } from "./driver";
 
 /**
- * Postgres (Neon) data layer.
+ * Postgres (Supabase) data layer.
  *
  * `getDb()` is async and idempotent: the first call in a process applies the
  * schema (every statement is `CREATE … IF NOT EXISTS`, so this file doubles as
@@ -53,43 +59,152 @@ export function resetDbForTests(): void {
   globalForDb.__kbDb = undefined;
 }
 
-/** True when a database connection string is configured. */
-export function databaseConfigured(): boolean {
-  return Boolean(process.env.DATABASE_URL || process.env.POSTGRES_URL);
+/** Every variable a connection string can arrive in, in priority order. */
+const URL_KEYS = [
+  "DATABASE_URL",
+  "POSTGRES_URL",
+  "SUPABASE_DB_URL",
+  "POSTGRES_PRISMA_URL",
+  "POSTGRES_URL_NON_POOLING",
+] as const;
+
+/**
+ * The configured connection string, or "" when there is none.
+ *
+ * A blank-but-present variable is the failure that started this: Vercel keeps an
+ * env var with an empty value, `process.env.DATABASE_URL` is `""` (falsy but
+ * defined), and every `if (!process.env.DATABASE_URL)` check says "configured"
+ * while the driver has nothing to connect with. Trim and skip blanks instead.
+ */
+export function databaseUrl(): string {
+  for (const key of URL_KEYS) {
+    const value = (process.env[key] ?? "").trim();
+    if (value) return value;
+  }
+  return "";
 }
 
+/** True when a database connection string is configured. */
+export function databaseConfigured(): boolean {
+  return databaseUrl() !== "";
+}
+
+/**
+ * Reasons a configured string still cannot be dialled, in the words someone can
+ * act on. The REST URL pasted into DATABASE_URL and the IPv6-only direct host
+ * are the two ways this goes wrong in practice; both used to surface as an
+ * opaque 500.
+ */
+export function connectionStringIssue(): string | null {
+  const url = databaseUrl();
+  if (!url) return null;
+  if (isPgliteUrl(url)) return null;
+  if (/^https?:\/\//i.test(url)) {
+    return (
+      "DATABASE_URL holds an https:// URL. That is the Supabase REST endpoint, not the database. " +
+      "Use the connection string from Connect → Connection pooling (it starts with postgresql://)."
+    );
+  }
+  if (!/^postgres(ql)?:\/\//i.test(url)) {
+    return "DATABASE_URL must start with postgresql:// (or postgres://).";
+  }
+  const host = (() => {
+    try {
+      return new URL(url).hostname;
+    } catch {
+      return "";
+    }
+  })();
+  if (!host)
+    return "DATABASE_URL is not a valid URL. Copy the connection string again — special characters in the password must be URL-encoded.";
+  if (/^db\.[a-z0-9]+\.supabase\.(co|net)$/i.test(host)) {
+    return (
+      "DATABASE_URL uses the direct Supabase host, which is IPv6-only and unreachable from Vercel. " +
+      "Use the pooler host instead (Connect → Connection pooling → Transaction, port 6543)."
+    );
+  }
+  return null;
+}
+
+/**
+ * Where we are connected to, safe to show in the UI and /api/health: host,
+ * database name and pooler mode. Never the user or the password.
+ */
 export function describeDatabaseTarget(): string {
-  const url = process.env.DATABASE_URL || process.env.POSTGRES_URL || "";
+  const url = databaseUrl();
   if (!url) return "not configured";
+  if (isPgliteUrl(url)) return "pglite (in-process)";
   try {
     const parsed = new URL(url);
-    return `${parsed.hostname}${parsed.pathname}`;
+    const mode = isSupabasePooler(url)
+      ? parsed.port === "6543"
+        ? " · pooler/transaction"
+        : " · pooler/session"
+      : "";
+    return `${parsed.hostname}${parsed.pathname}${mode}`;
   } catch {
     return "configured";
   }
 }
 
+/**
+ * Which Supabase project the connection string points at, derived from the
+ * pooler username (`postgres.<project-ref>`) or the direct host. Used only to
+ * warn when SUPABASE_URL and DATABASE_URL disagree, which is a confusing
+ * misconfiguration to debug from a 500 page.
+ */
+export function databaseProjectRef(): string | null {
+  const url = databaseUrl();
+  if (!url || isPgliteUrl(url)) return null;
+  try {
+    const parsed = new URL(url);
+    const fromUser = /^postgres\.([a-z0-9]+)$/i.exec(
+      decodeURIComponent(parsed.username),
+    );
+    if (fromUser) return fromUser[1];
+    const fromHost = /^db\.([a-z0-9]+)\.supabase\.(co|net)$/i.exec(
+      parsed.hostname,
+    );
+    return fromHost ? fromHost[1] : null;
+  } catch {
+    return null;
+  }
+}
+
+/** The Supabase project named by SUPABASE_URL, when that variable is set. */
+export function supabaseUrlProjectRef(): string | null {
+  const url = (process.env.SUPABASE_URL ?? "").trim();
+  if (!url) return null;
+  try {
+    const match = /^([a-z0-9]+)\.supabase\.(co|net)$/i.exec(
+      new URL(url).hostname,
+    );
+    return match ? match[1] : null;
+  } catch {
+    return null;
+  }
+}
+
 async function initialise(): Promise<Db> {
-  const url = (
-    process.env.DATABASE_URL ||
-    process.env.POSTGRES_URL ||
-    ""
-  ).trim();
+  const url = databaseUrl();
   if (!url) {
     throw new Error(
-      "DATABASE_URL is not set. Create a Neon Postgres project and add DATABASE_URL to your environment " +
+      "DATABASE_URL is not set. Add the Supabase connection string to your environment " +
         "(.env.local locally, Vercel → Project → Settings → Environment Variables in production).",
     );
   }
+
+  const issue = connectionStringIssue();
+  if (issue) throw new Error(issue);
 
   const db = globalForDb.__kbDbFactory
     ? globalForDb.__kbDbFactory()
     : isPgliteUrl(url)
       ? await createPgliteDb(url)
-      : createNeonDb(url);
+      : createPostgresDb(url);
 
-  // Retry transient failures (a paused Neon branch waking up, a network blip)
-  // before giving up — the app must recover without a redeploy.
+  // Retry transient failures (a paused Supabase project waking up, a network
+  // blip) before giving up — the app must recover without a redeploy.
   let lastError: unknown;
   for (let attempt = 1; attempt <= 3; attempt += 1) {
     try {
@@ -107,7 +222,7 @@ async function initialise(): Promise<Db> {
   throw lastError;
 }
 
-/** Local development uploads (only used when no blob driver is configured). */
+/** Local development uploads (only used when no cloud media driver is configured). */
 export function localUploadsDir(): string {
   const dir = path.join(process.cwd(), "data", "uploads");
   fs.mkdirSync(dir, { recursive: true });

@@ -1,6 +1,6 @@
 /**
  * End-to-end test of the Postgres data layer against PGlite (real Postgres 17
- * compiled to WASM, running in-process — no server, no Docker, no Neon needed).
+ * compiled to WASM, running in-process — no server, no Docker, no Supabase needed).
  *
  *   npm run test:pg
  *
@@ -65,7 +65,20 @@ import {
   setSettings,
 } from "../lib/settings";
 import { verifyPassword } from "../lib/auth/password";
-import type { Db } from "../lib/db/driver";
+import {
+  createSqlFromClient,
+  customTypes,
+  isSupabasePooler,
+  splitStatements,
+  type Db,
+} from "../lib/db/driver";
+import {
+  databaseConfigured,
+  databaseProjectRef,
+  databaseUrl,
+  describeDatabaseTarget,
+  supabaseUrlProjectRef,
+} from "../lib/db";
 
 let passed = 0;
 const failures: string[] = [];
@@ -704,6 +717,10 @@ async function main() {
     "photo storage release note present",
     whatsNew.some((entry) => entry.title.includes("Google Drive")),
   );
+  check(
+    "the Supabase migration is announced",
+    whatsNew.some((entry) => entry.title.includes("Supabase")),
+  );
   check("pinned entry first", whatsNew[0].title === "Order online, your way");
   const staffCount = await count(db, "staff");
   check("five demo staff accounts", staffCount === 5, staffCount);
@@ -828,6 +845,83 @@ async function main() {
     ),
     counts,
   );
+
+  // ------------------------------------------------------- connection wiring
+  // The live outage was not a query bug: DATABASE_URL existed in Vercel with an
+  // empty value, so every `if (!process.env.DATABASE_URL)` said "configured"
+  // while the driver had nothing to dial. These checks pin the resolution rules.
+  section("Connection resolution (Supabase)");
+  const saved = { ...process.env };
+  const pooler =
+    "postgresql://postgres.phjsppfyhlgeznhiaqsc:pw@aws-0-ap-southeast-2.pooler.supabase.com:6543/postgres";
+
+  for (const key of ["DATABASE_URL", "POSTGRES_URL", "SUPABASE_DB_URL"]) {
+    delete process.env[key];
+  }
+  check("no variable at all → not configured", !databaseConfigured());
+  check("no variable → target says so", describeDatabaseTarget() === "not configured");
+  check("no variable → no project ref", databaseProjectRef() === null);
+
+  process.env.DATABASE_URL = "   ";
+  check("whitespace-only variable → not configured", !databaseConfigured());
+
+  process.env.DATABASE_URL = pooler;
+  check("pooler string is recognised", isSupabasePooler(databaseUrl()));
+  check("pooler string is configured", databaseConfigured());
+  check(
+    "target names region pool and never the password",
+    describeDatabaseTarget().includes("pooler.supabase.com") &&
+      describeDatabaseTarget().includes("pooler/transaction") &&
+      !describeDatabaseTarget().includes("pw"),
+    describeDatabaseTarget(),
+  );
+  check(
+    "project ref comes from the postgres.<ref> username",
+    databaseProjectRef() === "phjsppfyhlgeznhiaqsc",
+  );
+
+  process.env.SUPABASE_URL = "https://phjsppfyhlgeznhiaqsc.supabase.co";
+  check(
+    "SUPABASE_URL project ref matches",
+    supabaseUrlProjectRef() === "phjsppfyhlgeznhiaqsc",
+  );
+  process.env.SUPABASE_URL = "https://someoneelse.supabase.co";
+  check(
+    "a mismatched SUPABASE_URL is detectable",
+    supabaseUrlProjectRef() !== databaseProjectRef(),
+  );
+
+  process.env.DATABASE_URL = "";
+  process.env.SUPABASE_DB_URL = pooler;
+  check(
+    "an empty DATABASE_URL falls through to the next variable",
+    databaseUrl() === pooler,
+  );
+  for (const [key, value] of Object.entries(saved)) {
+    if (value === undefined) delete process.env[key];
+    else process.env[key] = value;
+  }
+
+  check(
+    "transaction-mode template/comment script splits cleanly",
+    splitStatements(
+      "-- a comment; with a semicolon\nCREATE TABLE a (x TEXT DEFAULT 'y;z'); /* b; */ SELECT 1;",
+    ).length === 2,
+  );
+  check(
+    "int8 and numeric parse as JS numbers",
+    customTypes.getTypeParser(20)("42") === 42 &&
+      customTypes.getTypeParser(1700)("1.5") === 1.5,
+  );
+  const fake = createSqlFromClient({
+    query: async () => [{ id: 7, created_at: new Date(0) }],
+  });
+  const row = await fake.one<{ id: number; created_at: string }>("SELECT 1");
+  check(
+    "rows normalise timestamps to ISO strings",
+    row.created_at === new Date(0).toISOString(),
+  );
+  check("insert() reads RETURNING id", (await fake.insert("INSERT ...")) === 7);
 
   await harness.close();
 

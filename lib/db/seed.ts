@@ -1521,9 +1521,17 @@ async function seedWhatsNew(db: Database) {
     ],
     [
       "One database for every server instance",
-      "The platform now runs on Postgres (Neon) instead of a local SQL file.",
+      "The platform now runs on Postgres instead of a local SQL file.",
       "Orders, menu changes, stock and cost postings are stored in a single durable Postgres database shared by every server instance. Storage used to be per-instance and reset on redeploy; now a redeploy, a cold start or a second server sees exactly the same data. The schema and demo data are created automatically the first time the app connects — no migration step — and /api/health reports the database it is talking to plus live row counts.",
       "ops",
+      1,
+      "0 minutes",
+    ],
+    [
+      "Moved to Supabase: database and photos",
+      "The platform's database and dish photography now live in Supabase, in Sydney.",
+      "The app had been written against Neon while the project had already moved to Supabase, so the deployment had a connection string it could not use and every page fell back to the setup screen. The data layer now speaks plain Postgres over Supabase's connection pooler (transaction mode, port 6543), with the connection string resolved from DATABASE_URL — blanks now count as missing rather than as configured — and the schema is still created automatically on the first request. Dish photos upload to the menu-photos bucket in Supabase Storage and are served from its CDN, so nothing depends on a Vercel function's temporary disk. /api/health reports which project, which pooler mode and which media driver are in use.",
+      "fix",
       1,
       "0 minutes",
     ],

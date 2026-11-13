@@ -33,7 +33,7 @@ export default function GlobalError({
 
   const message = error.message ?? "";
   const databaseIssue =
-    /DATABASE_URL|Neon|ECONNREFUSED|ENOTFOUND|getaddrinfo|password authentication|does not exist/i.test(
+    /DATABASE_URL|Supabase|Neon|ECONNREFUSED|ENOTFOUND|ETIMEDOUT|getaddrinfo|password authentication|does not exist|pooler/i.test(
       message,
     );
   const databaseMissing = /DATABASE_URL is not set/i.test(message);
@@ -77,7 +77,7 @@ export default function GlobalError({
               <p style={{ color: "#c9c2b6", lineHeight: 1.6 }}>
                 {databaseMissing
                   ? "This deployment has no DATABASE_URL, so there is nowhere to read the menu from."
-                  : "The app could not reach Postgres. This is usually an environment variable or a suspended database branch."}
+                  : "The app could not reach Supabase. This is usually an environment variable, a wrong password, or a paused project."}
               </p>
               <ol
                 style={{
@@ -88,15 +88,15 @@ export default function GlobalError({
                 }}
               >
                 <li>
-                  Create a Neon project in Sydney and copy the <b>pooled</b>{" "}
-                  connection string (
-                  <code>postgresql://…-pooler…?sslmode=require</code>).
+                  Supabase → <b>khanbaba</b> → <b>Connect</b> → copy the{" "}
+                  <b>Connection pooling</b> (transaction, port 6543) string.
                 </li>
                 <li>
                   Vercel → this project →{" "}
-                  <b>Settings → Environment Variables</b> → add{" "}
+                  <b>Settings → Environment Variables</b> → set{" "}
                   <code>DATABASE_URL</code> for <b>Production</b> and{" "}
-                  <b>Preview</b>.
+                  <b>Preview</b>. A variable with an empty value counts as
+                  missing.
                 </li>
                 <li>
                   Redeploy. The schema and the demo menu are created

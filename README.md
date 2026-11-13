@@ -4,7 +4,7 @@ A complete, dynamic replacement for the Khan Baba static Wix site: public orderi
 dine-in), table QR ordering with live progress, counter → kitchen → courier workflow, Uber Direct delivery quotes,
 manufacturing/costing, rule-based surcharges and a What's New release feed.
 
-Next.js 15 (App Router) · React 19 · TypeScript · Postgres on Neon · self-hosted fonts · no third-party tracking.
+Next.js 15 (App Router) · React 19 · TypeScript · Postgres on Supabase · Supabase Storage for photos · self-hosted fonts · no third-party tracking.
 
 ---
 
@@ -12,13 +12,13 @@ Next.js 15 (App Router) · React 19 · TypeScript · Postgres on Neon · self-ho
 
 ```bash
 npm install
-cp .env.example .env.local      # paste your Neon DATABASE_URL
+cp .env.example .env.local      # paste your Supabase DATABASE_URL + SUPABASE_SECRET_KEY
 npm run dev                     # http://localhost:3000
 ```
 
 The schema is created and the demo dataset (menu, staff, recipes, pricing rules, demo orders) seeded automatically on
-the first request — there is no migration step to run, locally or on Vercel. `npm run seed` only exists to prepare a
-fresh Neon branch ahead of time (add `-- --reset` to wipe it first).
+the first request — there is no migration step to run, locally or on Vercel. `npm run seed` only exists to prepare the
+Supabase database ahead of time (add `-- --reset` to wipe it first).
 
 No database handy? Everything can also run against **PGlite** (Postgres 17 compiled to WebAssembly, in-process):
 
@@ -169,8 +169,8 @@ app/
   api/                     quote, orders, reviews, ops actions, uploads, webhooks
 components/                shared UI, cart, checkout, tracking, portal forms
 lib/
-  db/                      schema.sql (Postgres), Neon driver, seed data
-  media.ts                 upload driver: Vercel Blob / Google Drive / local disk
+  db/                      schema.sql (Postgres), Supabase/pg driver, seed data
+  media.ts                 upload driver: Supabase Storage / Vercel Blob / Google Drive / local disk
   pricing.ts               rule engine
   delivery/                Uber Direct + sandbox provider, margin pricing
   payments.ts              Stripe / sandbox
@@ -188,7 +188,7 @@ scripts/                   seed, what's-new generator, PGlite test harness
 npm run dev          # dev server on 0.0.0.0:3000
 npm run build        # production build
 npm run start        # production server
-npm run seed         # migrate + seed a Neon branch (add -- --reset to wipe)
+npm run seed         # migrate + seed the Supabase database (add -- --reset to wipe)
 npm run test:pg      # whole data layer against PGlite — no database needed
 npm run typecheck    # tsc --noEmit
 npm run schema:build # regenerate lib/db/schema.ts from schema.sql
@@ -201,32 +201,42 @@ Copy `.env.example` to `.env.local`. `DATABASE_URL` is the only mandatory value;
 `PUBLIC_BASE_URL` are strongly recommended, and every integration (Uber Direct, Stripe, photo storage) degrades to a
 clearly-labelled sandbox or local mode without credentials.
 
-| Variable                                                      | Purpose                                                                  |
-| ------------------------------------------------------------- | ------------------------------------------------------------------------ |
-| `DATABASE_URL`                                                | Neon Postgres connection string (pooled host, ends `-pooler`). Required. |
-| `PUBLIC_BASE_URL`                                             | Canonical URL for QR codes, sitemap and payment redirects.               |
-| `SESSION_SECRET`                                              | Signs staff sessions and delivery quotes.                                |
-| `BLOB_READ_WRITE_TOKEN`                                       | Vercel Blob store for dish photos (option A).                            |
-| `GOOGLE_DRIVE_SERVICE_ACCOUNT_JSON`, `GOOGLE_DRIVE_FOLDER_ID` | Google Drive for dish photos (option B).                                 |
-| `MEDIA_DRIVER`                                                | `auto` (default) / `blob` / `gdrive` / `local`.                          |
-| `UBER_DIRECT_*`, `STRIPE_*`                                   | Live courier quotes and card payments.                                   |
+| Variable                                                | Purpose                                                                                       |
+| ------------------------------------------------------- | --------------------------------------------------------------------------------------------- |
+| `DATABASE_URL`                                          | Supabase pooler string (host contains `pooler`, port `6543`). Required.                        |
+| `SUPABASE_URL`, `SUPABASE_SECRET_KEY`                   | Supabase Storage for dish photos (the default, durable driver).                               |
+| `SUPABASE_STORAGE_BUCKET`                               | Photo bucket, default `menu-photos` (created on first upload).                                |
+| `PUBLIC_BASE_URL`                                       | Canonical URL for QR codes, sitemap and payment redirects.                                    |
+| `SESSION_SECRET`                                        | Signs staff sessions and delivery quotes.                                                     |
+| `BLOB_READ_WRITE_TOKEN`                                 | Optional: Vercel Blob instead of Supabase Storage.                                            |
+| `GOOGLE_DRIVE_SERVICE_ACCOUNT_JSON`, `GOOGLE_DRIVE_FOLDER_ID` | Optional: Google Drive instead of Supabase Storage.                                     |
+| `MEDIA_DRIVER`                                          | `auto` (default) / `supabase` / `blob` / `gdrive` / `local`.                                  |
+| `UBER_DIRECT_*`, `STRIPE_*`                             | Live courier quotes and card payments.                                                        |
 
 ## Deployment
 
-Vercel + Neon. One durable Postgres database shared by every serverless instance — no volumes, no `/tmp`, no per-instance
-state.
+Vercel + Supabase. One durable Postgres database shared by every serverless instance — no volumes, no `/tmp`, no
+per-instance state.
 
 ### 1. Create the database
 
-1. Create a project at [neon.tech](https://neon.tech) in the **Sydney** (`ap-southeast-2`) region so queries stay next
-   to the functions.
-2. **Connect → Pooled connection** and copy the string — it looks like
-   `postgresql://user:pass@ep-xxx-pooler.ap-southeast-2.aws.neon.tech/khanbaba?sslmode=require`.
-   - _Pooled_ (`-pooler` host) is what the app should use: the driver talks to Neon over HTTPS, one round trip per
-     statement, so no TCP pool is held open by a serverless function.
-   - _Direct_ (no `-pooler`) is what you want for `npm run seed` and long-lived admin sessions; both strings work.
-3. Set `DATABASE_URL` in **Vercel → Project → Settings → Environment Variables** for **Production** _and_ **Preview**
-   (and in `.env.local` for development). Nothing else is required for the database.
+The project is **khanbaba** on Supabase (`phjsppfyhlgeznhiaqsc`, `ap-southeast-2` = Sydney).
+
+1. Supabase → **khanbaba** → **Connect** → **Connection pooling** → copy the **Transaction** string (port `6543`):
+   `postgresql://postgres.phjsppfyhlgeznhiaqsc:PASSWORD@aws-0-ap-southeast-2.pooler.supabase.com:6543/postgres`
+   - Use the **pooler**, not the direct `db.<ref>.supabase.co` host: the direct host resolves to IPv6 only and is not
+     reachable from Vercel's functions.
+   - Transaction mode is fine for everything this app does (the driver uses unnamed statements, and any transaction is
+     pinned to one checked-out connection). Port `5432` on the same host is session mode if you prefer it.
+   - If the password contains `@ : / ? #`, URL-encode those characters, or reset it in
+     **Project Settings → Database**.
+2. Set `DATABASE_URL` in **Vercel → Project → Settings → Environment Variables** for **Production** _and_ **Preview**
+   (and in `.env.local` for development). A variable that exists with an **empty value** counts as missing — the app
+   reports `blank-connection-string` on `/api/health` so this cannot masquerade as a code bug again.
+3. Set `SUPABASE_URL=https://phjsppfyhlgeznhiaqsc.supabase.co` and `SUPABASE_SECRET_KEY` (Project Settings → API
+   Keys → secret key) for photo uploads, plus `SUPABASE_STORAGE_BUCKET=menu-photos`.
+
+Nothing else is required for the database: the schema lives in the app.
 
 ### 2. Deploy
 
@@ -243,28 +253,30 @@ Already have data? The seed is skipped whenever `menu_items` has rows, so redepl
 
 ### 3. Dish photos
 
-Pick a driver — the app picks one automatically in this order: Blob → Google Drive → local disk.
+Pick a driver — the app picks one automatically in this order: Supabase Storage → Vercel Blob → Google Drive → local
+disk.
 
-- **Vercel Blob** (least setup on Vercel): create a blob store, set `BLOB_READ_WRITE_TOKEN`. Uploads go to the CDN and
-  the returned URL is stored on the dish.
+- **Supabase Storage** (default): set `SUPABASE_URL` and `SUPABASE_SECRET_KEY`. Uploads land in the public
+  `menu-photos` bucket (created automatically on the first upload if it is missing, public, 5 MB, images only) and the
+  CDN URL is stored on the dish. Keep the secret key server-side — it bypasses row-level security.
+- **Vercel Blob**: create a blob store, set `BLOB_READ_WRITE_TOKEN`.
 - **Google Drive** (photos stay in your own Drive): create a Google Cloud project, enable the **Google Drive API**,
   create a service account and a JSON key, paste the key into `GOOGLE_DRIVE_SERVICE_ACCOUNT_JSON` (raw or base64) and
   share your photos folder with the service account's `client_email` as **Editor**; put the folder id in
-  `GOOGLE_DRIVE_FOLDER_ID`. Each upload is stored in that folder and made readable by anyone with the link, so the menu
-  can display it without a Drive login. Deleting a dish deletes the file.
+  `GOOGLE_DRIVE_FOLDER_ID`.
 - **Local disk** is the dev fallback only: files land in `data/uploads` and are served by `/api/media/[name]`. On Vercel
-  that directory is ephemeral, so the admin banner warns you and the upload endpoint returns a `note` telling you to
-  configure Blob or Drive. Force a driver with `MEDIA_DRIVER=blob|gdrive|local` or the `media_driver` setting.
+  that directory is ephemeral, so the admin banner warns you. Force a driver with
+  `MEDIA_DRIVER=supabase|blob|gdrive|local` or the `media_driver` setting.
 
 ### 4. Backups
 
-- Neon keeps a **point-in-time restore** window (1 day on the free plan, up to 30 on paid) — `Restore` in the console
-  rolls the branch back to any second inside it.
+- Supabase takes daily backups (Pro plan) and keeps **point-in-time restore** for the retention window — see
+  Project Settings → Database → Backups.
 - Nightly logical backup, run anywhere with network access:
-  `pg_dump "$DATABASE_URL_DIRECT" -Fc -f khanbaba-$(date +%F).dump`
-  (use the **direct**, non-pooled string; pooled connections close during long dumps). Restore with `pg_restore`.
-- Branch instead of copying for risky changes: `neon branches create --name pre-deploy`, restore or discard afterwards.
-- Dish photos live in Blob or your Drive folder — back those up per their own retention rules.
+  `pg_dump "$DATABASE_URL" -Fc -f khanbaba-$(date +%F).dump`
+  (session mode on port `5432` is the safer choice for long dumps). Restore with `pg_restore`.
+- For risky changes use a Supabase **branch** (or a copy) rather than working on production.
+- Dish photos live in the `menu-photos` bucket — Supabase Storage is covered by the same project's backups.
 
 ### 5. Checking a deployment
 
@@ -282,16 +294,20 @@ That screen (with a digest number) is what Next.js shows when a server component
 it. The most common cause by far is a deployment with **no `DATABASE_URL`** — the project builds fine, but every page
 that reads the menu fails on its first query.
 
-1. Open `/api/health`. `{"ok": false, "storage": "unconfigured"}` means the variable is missing; a message about the
-   connection means it is set but the database is unreachable.
+1. Open `/api/health`. It distinguishes the cases that all look the same in the browser:
+   - `storage: "unconfigured"` with `reason: "missing-connection-string"` — no `DATABASE_URL` at all.
+   - `storage: "unconfigured"` with `reason: "blank-connection-string"` — the variable exists but its value is empty
+     (this was the live outage).
+   - `reason: "authentication-failed"` — wrong password; re-copy the pooler string, URL-encoding special characters.
+   - `reason: "unreachable"` — wrong host/region, or the project is paused.
 2. Confirm the variable exists for **both** Production and Preview: `vercel env ls` or Settings → Environment
    Variables. Vercel only injects variables set _before_ a build, so adding one requires a redeploy.
-3. Paste the **pooled** Neon string (`…-pooler…`) and check the branch is not suspended.
+3. Paste the Supabase **pooler** string (port `6543`) and check the project is not paused.
 
 Since this release the failure is no longer opaque: the root layout no longer touches the database (it renders the
 restaurant name/address from `lib/settings.ts` defaults), and both `app/error.tsx` and `app/global-error.tsx` recognise
 a database configuration error and print these steps instead of the digest page. `/api/health` stays the single source
-of truth for diagnosis.
+of truth for diagnosis, and now also warns when `SUPABASE_URL` and `DATABASE_URL` point at different projects.
 
 ### 6. Local testing against the real engine
 
@@ -322,11 +338,11 @@ HTTPS and point both webhooks (`/api/webhooks/uber`, `/api/webhooks/stripe`) at 
 - Update restaurant name, phone, email and address in **Admin → Pricing & holidays → Restaurant profile** (the seeded
   values are placeholders).
 - Add real Uber Direct and Stripe credentials, then switch providers in **Admin → Delivery & payments**.
-- Configure Blob or Google Drive for photos before adding dishes (see above).
+- Configure Supabase Storage (`SUPABASE_URL` + `SUPABASE_SECRET_KEY`) before adding dishes (see above).
 - Print table QR codes from **Admin → Tables & QR codes**.
 - Add a What's New entry for every release (`npm run whatsnew` or the admin publisher).
-- Monitor `GET /api/health`: `ok: false` means the database is unreachable (usually a missing `DATABASE_URL` or a
-  suspended Neon branch).
+- Monitor `GET /api/health`: `ok: false` means the database is unreachable (usually a missing or blank `DATABASE_URL`, or
+  a paused Supabase project).
 
 ## Roadmap
 

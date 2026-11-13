@@ -55,11 +55,13 @@ export default async function DeliverySettingsPage() {
             className={`badge ${media.configured && media.driver !== "local" ? "badge-green" : "badge-amber"}`}
           >
             Photos:{" "}
-            {media.driver === "blob"
-              ? "Vercel Blob"
-              : media.driver === "gdrive"
-                ? "Google Drive"
-                : "local disk"}
+            {media.driver === "supabase"
+              ? "Supabase Storage"
+              : media.driver === "blob"
+                ? "Vercel Blob"
+                : media.driver === "gdrive"
+                  ? "Google Drive"
+                  : "local disk"}
           </span>
         </div>
       </div>
