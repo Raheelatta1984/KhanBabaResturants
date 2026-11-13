@@ -11,7 +11,7 @@ export type Material = {
   stock_qty: number;
   reorder_level: number;
   supplier: string | null;
-  active: number;
+  active: boolean;
 };
 
 export type Recipe = {
@@ -23,7 +23,7 @@ export type Recipe = {
   output_unit: string;
   prep_minutes: number;
   notes: string | null;
-  active: number;
+  active: boolean;
 };
 
 export type RecipeLine = {
@@ -36,35 +36,51 @@ export type RecipeLine = {
 };
 
 /** Cost of one purchase pack spread across the pack quantity, in cents per base unit. */
-export function materialUnitCostCents(material: Pick<Material, "pack_qty" | "pack_cost_cents">): number {
+export function materialUnitCostCents(
+  material: Pick<Material, "pack_qty" | "pack_cost_cents">,
+): number {
   const packQty = material.pack_qty || 1;
   return material.pack_cost_cents / packQty;
 }
 
 export type RecipeCost = {
   recipe: Recipe;
-  lines: (RecipeLine & { material_name: string; unit_cost_cents: number; cost_cents: number })[];
+  lines: (RecipeLine & {
+    material_name: string;
+    unit_cost_cents: number;
+    cost_cents: number;
+  })[];
   totalCostCents: number;
   costPerUnitCents: number;
 };
 
-export function getRecipeCost(db: Db, recipeId: number): RecipeCost {
-  const recipe = db.prepare("SELECT * FROM recipes WHERE id = ?").get(recipeId) as Recipe;
+export async function getRecipeCost(
+  db: Db,
+  recipeId: number,
+): Promise<RecipeCost> {
+  const recipe = await db.maybeOne<Recipe>(
+    "SELECT * FROM recipes WHERE id = $1",
+    [recipeId],
+  );
   if (!recipe) throw new Error("Recipe not found");
-  const rows = db
-    .prepare(
-      `SELECT rl.*, m.name AS material_name, m.unit AS material_unit, m.pack_qty, m.pack_cost_cents
-       FROM recipe_lines rl JOIN materials m ON m.id = rl.material_id
-       WHERE rl.recipe_id = ? ORDER BY rl.id`,
-    )
-    .all(recipeId) as (RecipeLine & {
-    material_unit: string;
-    pack_qty: number;
-    pack_cost_cents: number;
-  })[];
+  const rows = await db.query<
+    RecipeLine & {
+      material_unit: string;
+      pack_qty: number;
+      pack_cost_cents: number;
+    }
+  >(
+    `SELECT rl.*, m.name AS material_name, m.unit AS material_unit, m.pack_qty, m.pack_cost_cents
+     FROM recipe_lines rl JOIN materials m ON m.id = rl.material_id
+     WHERE rl.recipe_id = $1 ORDER BY rl.id`,
+    [recipeId],
+  );
 
   const lines = rows.map((row) => {
-    const unitCost = materialUnitCostCents({ pack_qty: row.pack_qty, pack_cost_cents: row.pack_cost_cents });
+    const unitCost = materialUnitCostCents({
+      pack_qty: row.pack_qty,
+      pack_cost_cents: row.pack_cost_cents,
+    });
     return {
       ...row,
       unit: row.unit ?? row.material_unit,
@@ -83,10 +99,12 @@ export function getRecipeCost(db: Db, recipeId: number): RecipeCost {
   };
 }
 
-function nextBatchRef(db: Db): string {
+async function nextBatchRef(db: Db): Promise<string> {
   const stamp = new Date().toISOString().slice(0, 10).replace(/-/g, "");
-  const count = (db.prepare("SELECT COUNT(*) AS c FROM production_batches").get() as { c: number }).c + 1;
-  return `BATCH-${stamp}-${String(count).padStart(3, "0")}`;
+  const row = await db.one<{ c: number }>(
+    "SELECT COUNT(*) AS c FROM production_batches",
+  );
+  return `BATCH-${stamp}-${String(Number(row.c) + 1).padStart(3, "0")}`;
 }
 
 export type BatchSummary = {
@@ -104,31 +122,40 @@ export type BatchSummary = {
 };
 
 /** Start a production run (naan, roti, curry base…) without consuming stock yet. */
-export function startBatch(
+export async function startBatch(
   db: Db,
-  input: { recipeId: number; plannedQty: number; actor: string; notes?: string },
-): BatchSummary {
-  const recipe = db.prepare("SELECT * FROM recipes WHERE id = ?").get(input.recipeId) as Recipe | undefined;
+  input: {
+    recipeId: number;
+    plannedQty: number;
+    actor: string;
+    notes?: string;
+  },
+): Promise<BatchSummary> {
+  const recipe = await db.maybeOne<Recipe>(
+    "SELECT * FROM recipes WHERE id = $1",
+    [input.recipeId],
+  );
   if (!recipe) throw new Error("Recipe not found");
-  if (!Number.isFinite(input.plannedQty) || input.plannedQty <= 0) throw new Error("Planned quantity must be positive");
-  const ref = nextBatchRef(db);
-  const result = db
-    .prepare(
-      `INSERT INTO production_batches (ref, recipe_id, planned_qty, status, created_by, notes)
-       VALUES (?, ?, ?, 'in_progress', ?, ?)`,
-    )
-    .run(ref, input.recipeId, input.plannedQty, input.actor, input.notes ?? null);
-  return getBatch(db, Number(result.lastInsertRowid))!;
+  if (!Number.isFinite(input.plannedQty) || input.plannedQty <= 0)
+    throw new Error("Planned quantity must be positive");
+  const ref = await nextBatchRef(db);
+  const id = await db.insert(
+    `INSERT INTO production_batches (ref, recipe_id, planned_qty, status, created_by, notes)
+     VALUES ($1, $2, $3, 'in_progress', $4, $5) RETURNING id`,
+    [ref, input.recipeId, input.plannedQty, input.actor, input.notes ?? null],
+  );
+  return (await getBatch(db, id))!;
 }
 
-export function getBatch(db: Db, id: number): BatchSummary | null {
-  const row = db
-    .prepare(
-      `SELECT b.*, r.name AS recipe_name FROM production_batches b
-       JOIN recipes r ON r.id = b.recipe_id WHERE b.id = ?`,
-    )
-    .get(id) as BatchSummary | undefined;
-  return row ?? null;
+export async function getBatch(
+  db: Db,
+  id: number,
+): Promise<BatchSummary | null> {
+  return db.maybeOne<BatchSummary>(
+    `SELECT b.*, r.name AS recipe_name FROM production_batches b
+     JOIN recipes r ON r.id = b.recipe_id WHERE b.id = $1`,
+    [id],
+  );
 }
 
 /**
@@ -136,85 +163,105 @@ export function getBatch(db: Db, id: number): BatchSummary | null {
  * the run and draw the quantities down from stock. This is the manufacturing
  * ledger — every gram consumed is traceable to a batch and a cost posting.
  */
-export function completeBatch(
+export async function completeBatch(
   db: Db,
   batchId: number,
   actor: string,
-): { batch: BatchSummary; postings: number; totalCostCents: number } {
-  const batch = db.prepare("SELECT * FROM production_batches WHERE id = ?").get(batchId) as
-    | { id: number; recipe_id: number; planned_qty: number; status: string }
-    | undefined;
+): Promise<{ batch: BatchSummary; postings: number; totalCostCents: number }> {
+  const batch = await db.maybeOne<{
+    id: number;
+    recipe_id: number;
+    planned_qty: number;
+    status: string;
+  }>(
+    "SELECT id, recipe_id, planned_qty, status FROM production_batches WHERE id = $1",
+    [batchId],
+  );
   if (!batch) throw new Error("Batch not found");
-  if (batch.status !== "in_progress") throw new Error("Batch has already been closed");
+  if (batch.status !== "in_progress")
+    throw new Error("Batch has already been closed");
+  void actor;
 
-  const cost = getRecipeCost(db, batch.recipe_id);
+  const cost = await getRecipeCost(db, batch.recipe_id);
   const scale = batch.planned_qty / (cost.recipe.output_qty || 1);
 
-  const insertPosting = db.prepare(
-    `INSERT INTO cost_postings (batch_id, material_id, material_name, qty, unit, unit_cost_cents, amount_cents)
-     VALUES (?, ?, ?, ?, ?, ?, ?)`,
-  );
-  const consumeStock = db.prepare("UPDATE materials SET stock_qty = MAX(0, stock_qty - ?) WHERE id = ?");
-
-  let total = 0;
-  const tx = db.transaction(() => {
+  const total = await db.transaction(async (tx) => {
+    let running = 0;
     for (const line of cost.lines) {
       const qty = Number((line.qty * scale).toFixed(4));
       const amount = Math.round(line.unit_cost_cents * qty);
-      total += amount;
-      insertPosting.run(
-        batchId,
-        line.material_id,
-        line.material_name,
-        qty,
-        line.unit,
-        line.unit_cost_cents,
-        amount,
+      running += amount;
+      await tx.query(
+        `INSERT INTO cost_postings (batch_id, material_id, material_name, qty, unit, unit_cost_cents, amount_cents)
+         VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+        [
+          batchId,
+          line.material_id,
+          line.material_name,
+          qty,
+          line.unit,
+          line.unit_cost_cents,
+          amount,
+        ],
       );
-      consumeStock.run(qty, line.material_id);
+      await tx.query(
+        "UPDATE materials SET stock_qty = GREATEST(0, stock_qty - $1) WHERE id = $2",
+        [qty, line.material_id],
+      );
     }
-    db.prepare(
-      "UPDATE production_batches SET status = 'completed', completed_at = datetime('now'), total_cost_cents = ? WHERE id = ?",
-    ).run(total, batchId);
+    await tx.query(
+      "UPDATE production_batches SET status = 'completed', completed_at = now(), total_cost_cents = $1 WHERE id = $2",
+      [running, batchId],
+    );
+    return running;
   });
-  tx();
 
-  return { batch: getBatch(db, batchId)!, postings: cost.lines.length, totalCostCents: total };
+  return {
+    batch: (await getBatch(db, batchId))!,
+    postings: cost.lines.length,
+    totalCostCents: total,
+  };
 }
 
-export function cancelBatch(db: Db, batchId: number): void {
-  db.prepare(
-    "UPDATE production_batches SET status = 'cancelled', completed_at = datetime('now') WHERE id = ? AND status = 'in_progress'",
-  ).run(batchId);
+export async function cancelBatch(db: Db, batchId: number): Promise<void> {
+  await db.query(
+    "UPDATE production_batches SET status = 'cancelled', completed_at = now() WHERE id = $1 AND status = 'in_progress'",
+    [batchId],
+  );
 }
 
-export function lowStockMaterials(db: Db, limit = 8): Material[] {
-  return db
-    .prepare(
-      `SELECT * FROM materials WHERE active = 1 AND stock_qty <= reorder_level
-       ORDER BY (stock_qty - reorder_level) ASC LIMIT ?`,
-    )
-    .all(limit) as Material[];
+export async function lowStockMaterials(
+  db: Db,
+  limit = 8,
+): Promise<Material[]> {
+  return db.query<Material>(
+    `SELECT * FROM materials WHERE active AND stock_qty <= reorder_level
+     ORDER BY (stock_qty - reorder_level) ASC LIMIT $1`,
+    [limit],
+  );
 }
 
-export function materialUsage(db: Db, days = 30) {
-  return db
-    .prepare(
-      `SELECT material_name, unit, SUM(qty) AS qty, SUM(amount_cents) AS cost_cents, COUNT(*) AS postings
-       FROM cost_postings WHERE posted_at >= datetime('now', ?)
-       GROUP BY material_id, material_name, unit ORDER BY cost_cents DESC`,
-    )
-    .all(`-${days} days`) as { material_name: string; unit: string; qty: number; cost_cents: number; postings: number }[];
+export async function materialUsage(db: Db, days = 30) {
+  return db.query<{
+    material_name: string;
+    unit: string;
+    qty: number;
+    cost_cents: number;
+    postings: number;
+  }>(
+    `SELECT material_name, unit, SUM(qty) AS qty, SUM(amount_cents) AS cost_cents, COUNT(*) AS postings
+     FROM cost_postings WHERE posted_at >= now() - $1::interval
+     GROUP BY material_id, material_name, unit ORDER BY cost_cents DESC`,
+    [`${days} days`],
+  );
 }
 
-export function cogsTotals(db: Db, days = 1) {
-  const row = db
-    .prepare(
-      `SELECT COALESCE(SUM(amount_cents), 0) AS cost_cents, COUNT(DISTINCT batch_id) AS batches
-       FROM cost_postings WHERE posted_at >= datetime('now', ?)`,
-    )
-    .get(`-${days} days`) as { cost_cents: number; batches: number };
-  return row;
+export async function cogsTotals(db: Db, days = 1) {
+  return db.one<{ cost_cents: number; batches: number }>(
+    `SELECT COALESCE(SUM(amount_cents), 0) AS cost_cents, COUNT(DISTINCT batch_id) AS batches
+     FROM cost_postings WHERE posted_at >= now() - $1::interval`,
+    [`${days} days`],
+  );
 }
 
 export function newMaterialSku(): string {

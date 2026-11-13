@@ -1,38 +1,88 @@
 /**
- * Seed the local database with the Khan Baba menu, staff accounts, pricing rules,
- * materials/recipes and demo orders. Safe to run repeatedly — it only seeds an
- * empty database.
+ * Seed the Postgres database with the Khan Baba menu, staff accounts, pricing
+ * rules, materials/recipes and demo orders.
  *
- *   npm run seed          # seed if empty
- *   npm run seed -- --reset   # wipe the database file first
+ *   npm run seed              # schema + seed if the database is empty
+ *   npm run seed -- --reset   # delete every row first, then seed
+ *
+ * The app also self-seeds on its first request, so this script is only needed
+ * when you want to prepare a Neon branch ahead of a deploy.
  */
-import fs from "node:fs";
-import path from "node:path";
+import { getDb } from "../lib/db";
+import { seedDatabase } from "../lib/db/seed";
+import { SCHEMA_SQL } from "../lib/db/schema";
 
 const args = process.argv.slice(2);
-if (args.includes("--reset")) {
-  const dir = process.env.KB_DATA_DIR || path.join(process.cwd(), "data");
-  for (const file of ["khanbaba.db", "khanbaba.db-wal", "khanbaba.db-shm"]) {
-    const target = path.join(dir, file);
-    if (fs.existsSync(target)) fs.rmSync(target);
+
+async function main() {
+  if (!process.env.DATABASE_URL && !process.env.POSTGRES_URL) {
+    console.error(
+      "DATABASE_URL is not set.\n" +
+        "Locally: copy .env.example to .env.local and paste your Neon connection string.\n" +
+        "CI: `npm run test:pg` runs the whole suite against PGlite with no database at all.",
+    );
+    process.exit(1);
   }
-  console.log("Removed existing database", dir);
+
+  const db = await getDb();
+
+  if (args.includes("--reset")) {
+    // Demo data only — order matters (children first) because of the FKs.
+    const tables = [
+      "cost_postings",
+      "recipe_lines",
+      "production_batches",
+      "recipes",
+      "materials",
+      "order_events",
+      "order_items",
+      "payments",
+      "delivery_jobs",
+      "orders",
+      "reviews",
+      "item_variants",
+      "menu_items",
+      "categories",
+      "pricing_rules",
+      "holidays",
+      "dining_tables",
+      "staff",
+      "settings",
+      "whats_new",
+    ];
+    for (const table of tables) {
+      await db.query(`DELETE FROM ${table}`);
+    }
+    await db.exec(SCHEMA_SQL);
+    console.log("Cleared every table");
+  }
+
+  const result = await seedDatabase(db);
+  const count = async (table: string) =>
+    Number(
+      (await db.one<{ c: number }>(`SELECT COUNT(*) AS c FROM ${table}`)).c,
+    );
+
+  const counts = {
+    categories: await count("categories"),
+    menuItems: await count("menu_items"),
+    variants: await count("item_variants"),
+    staff: await count("staff"),
+    tables: await count("dining_tables"),
+    materials: await count("materials"),
+    recipes: await count("recipes"),
+    batches: await count("production_batches"),
+    costPostings: await count("cost_postings"),
+    orders: await count("orders"),
+    whatsNew: await count("whats_new"),
+  };
+  console.log(
+    `${result.seeded ? "Seed complete" : "Database already seeded"}:\n` +
+      JSON.stringify(counts, null, 2),
+  );
 }
 
-import { getDb } from "../lib/db";
-
-const db = getDb();
-const counts = {
-  categories: (db.prepare("SELECT COUNT(*) c FROM categories").get() as { c: number }).c,
-  menuItems: (db.prepare("SELECT COUNT(*) c FROM menu_items").get() as { c: number }).c,
-  variants: (db.prepare("SELECT COUNT(*) c FROM item_variants").get() as { c: number }).c,
-  staff: (db.prepare("SELECT COUNT(*) c FROM staff").get() as { c: number }).c,
-  tables: (db.prepare("SELECT COUNT(*) c FROM dining_tables").get() as { c: number }).c,
-  materials: (db.prepare("SELECT COUNT(*) c FROM materials").get() as { c: number }).c,
-  recipes: (db.prepare("SELECT COUNT(*) c FROM recipes").get() as { c: number }).c,
-  batches: (db.prepare("SELECT COUNT(*) c FROM production_batches").get() as { c: number }).c,
-  costPostings: (db.prepare("SELECT COUNT(*) c FROM cost_postings").get() as { c: number }).c,
-  orders: (db.prepare("SELECT COUNT(*) c FROM orders").get() as { c: number }).c,
-  whatsNew: (db.prepare("SELECT COUNT(*) c FROM whats_new").get() as { c: number }).c,
-};
-console.log("Seed complete:\n" + JSON.stringify(counts, null, 2));
+main().catch((error) => {
+  console.error("Seed failed:", error);
+  process.exit(1);
+});

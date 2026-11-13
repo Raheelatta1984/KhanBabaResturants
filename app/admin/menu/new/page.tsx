@@ -4,11 +4,10 @@ import { MenuEditor, type EditorItem } from "@/components/portal/MenuEditor";
 export const dynamic = "force-dynamic";
 
 export default async function NewDishPage() {
-  const db = getDb();
-  const categories = db.prepare("SELECT id, name FROM categories WHERE active = 1 ORDER BY sort_order").all() as {
-    id: number;
-    name: string;
-  }[];
+  const db = await getDb();
+  const categories = await db.query<{ id: number; name: string }>(
+    "SELECT id, name FROM categories WHERE active ORDER BY sort_order",
+  );
 
   const initial: EditorItem = {
     name: "",
@@ -35,7 +34,10 @@ export default async function NewDishPage() {
       <div className="page-head">
         <div>
           <h1>New dish</h1>
-          <p>Onboard a new item: photography, video, ingredients, allergens, sizes and spice options.</p>
+          <p>
+            Onboard a new item: photography, video, ingredients, allergens,
+            sizes and spice options.
+          </p>
         </div>
       </div>
       <MenuEditor categories={categories} initial={initial} />

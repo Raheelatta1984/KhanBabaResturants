@@ -1,4 +1,4 @@
-import type { Db } from "../db";
+import { getDb, type Db } from "../db";
 import { getSetting, getSettingNumber } from "../settings";
 import { priceDelivery, type DeliveryPricing } from "../pricing";
 import { SimulatedProvider } from "./simulated";
@@ -7,24 +7,32 @@ import type { DeliveryProvider, QuoteRequest } from "./types";
 
 export type { DeliveryPricing } from "../pricing";
 
-export function getDeliveryProvider(db?: Db): DeliveryProvider {
-  const configured = getSetting("delivery_provider", "auto");
-  if (configured === "simulated") return new SimulatedProvider();
-  if (configured === "uber") return new UberDirectProvider();
-  return uberConfigured() ? new UberDirectProvider() : new SimulatedProvider();
+export async function getDeliveryProvider(db?: Db): Promise<DeliveryProvider> {
+  const handle = db ?? (await getDb());
+  const configured = await getSetting("delivery_provider", "auto");
+  if (configured === "simulated") return new SimulatedProvider(handle);
+  if (configured === "uber") return new UberDirectProvider(handle);
+  return (await uberConfigured(handle))
+    ? new UberDirectProvider(handle)
+    : new SimulatedProvider(handle);
 }
 
-export function deliveryMarginSettings() {
+export async function deliveryMarginSettings(): Promise<{
+  markupPercent: number;
+  markupMinCents: number;
+  roundingCents: number;
+  maxFeeCents: number;
+}> {
   return {
-    markupPercent: getSettingNumber("delivery_markup_percent", 15),
-    markupMinCents: getSettingNumber("delivery_markup_min_cents", 100),
-    roundingCents: getSettingNumber("delivery_rounding_cents", 50),
-    maxFeeCents: getSettingNumber("delivery_max_fee_cents", 2500),
+    markupPercent: await getSettingNumber("delivery_markup_percent", 15),
+    markupMinCents: await getSettingNumber("delivery_markup_min_cents", 100),
+    roundingCents: await getSettingNumber("delivery_rounding_cents", 50),
+    maxFeeCents: await getSettingNumber("delivery_max_fee_cents", 2500),
   };
 }
 
-export function applyDeliveryMargin(costCents: number) {
-  return priceDelivery(costCents, deliveryMarginSettings());
+export async function applyDeliveryMargin(costCents: number) {
+  return priceDelivery(costCents, await deliveryMarginSettings());
 }
 
 /**
@@ -32,19 +40,24 @@ export function applyDeliveryMargin(costCents: number) {
  * If Uber Direct is configured but unavailable, we degrade to the local model and
  * flag the quote as non-live so the checkout can tell the customer.
  */
-export async function quoteDelivery(request: QuoteRequest): Promise<DeliveryPricing> {
-  const provider = getDeliveryProvider();
+export async function quoteDelivery(
+  request: QuoteRequest,
+): Promise<DeliveryPricing> {
+  const provider = await getDeliveryProvider();
   let fallbackReason: string | undefined;
   let quote;
 
   try {
     quote = await provider.quote(request);
   } catch (error) {
-    fallbackReason = error instanceof Error ? error.message : "Courier quote unavailable";
+    fallbackReason =
+      error instanceof Error ? error.message : "Courier quote unavailable";
     quote = await new SimulatedProvider().quote(request);
   }
 
-  const { customerFeeCents, serviceFeeCents } = applyDeliveryMargin(quote.feeCents);
+  const { customerFeeCents, serviceFeeCents } = await applyDeliveryMargin(
+    quote.feeCents,
+  );
 
   return {
     provider: quote.provider,
@@ -55,7 +68,10 @@ export async function quoteDelivery(request: QuoteRequest): Promise<DeliveryPric
     etaMinutes: quote.etaMinutes,
     expiresAt: quote.expiresAt,
     live: quote.live,
-    raw: { ...(typeof quote.raw === "object" && quote.raw ? quote.raw : {}), fallbackReason },
+    raw: {
+      ...(typeof quote.raw === "object" && quote.raw ? quote.raw : {}),
+      fallbackReason,
+    },
   };
 }
 
@@ -63,12 +79,20 @@ export async function dispatchWithProvider(
   providerName: string,
   request: Parameters<DeliveryProvider["dispatch"]>[0],
 ) {
-  const provider = providerName === "uber_direct" ? new UberDirectProvider() : new SimulatedProvider();
+  const db = await getDb();
+  const provider =
+    providerName === "uber_direct"
+      ? new UberDirectProvider(db)
+      : new SimulatedProvider(db);
   return provider.dispatch(request);
 }
 
 export async function providerStatus(providerName: string, deliveryId: string) {
-  const provider = providerName === "uber_direct" ? new UberDirectProvider() : new SimulatedProvider();
+  const db = await getDb();
+  const provider =
+    providerName === "uber_direct"
+      ? new UberDirectProvider(db)
+      : new SimulatedProvider(db);
   return provider.status(deliveryId);
 }
 

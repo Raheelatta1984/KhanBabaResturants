@@ -6,16 +6,16 @@ import { TableManager } from "@/components/portal/AdminForms";
 export const dynamic = "force-dynamic";
 
 export default async function TablesPage() {
-  const db = getDb();
+  const db = await getDb();
   const baseUrl = await getBaseUrl();
-  const rows = db.prepare("SELECT * FROM dining_tables ORDER BY code").all() as {
+  const rows = await db.query<{
     id: number;
     code: string;
     name: string;
     zone: string | null;
     seats: number;
-    active: number;
-  }[];
+    active: boolean;
+  }>("SELECT * FROM dining_tables ORDER BY code");
 
   const tables = await Promise.all(
     rows.map(async (row) => ({
@@ -35,8 +35,8 @@ export default async function TablesPage() {
         <div>
           <h1>Tables &amp; QR codes</h1>
           <p>
-            Print a QR for each table. Guests scan it, order from their phone and track preparation live — no app, no
-            third-party platform.
+            Print a QR for each table. Guests scan it, order from their phone
+            and track preparation live — no app, no third-party platform.
           </p>
         </div>
         <span className="badge badge-amber">{tables.length} tables</span>

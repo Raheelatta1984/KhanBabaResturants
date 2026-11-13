@@ -8,7 +8,8 @@ import { getSettings } from "@/lib/settings";
 
 export const metadata: Metadata = {
   title: {
-    default: "Khan Baba Restaurant — Halal Pakistani food, delivered from Sydney",
+    default:
+      "Khan Baba Restaurant — Halal Pakistani food, delivered from Sydney",
     template: "%s · Khan Baba Restaurant",
   },
   description:
@@ -16,7 +17,8 @@ export const metadata: Metadata = {
   metadataBase: new URL(process.env.PUBLIC_BASE_URL || "http://localhost:3000"),
   openGraph: {
     title: "Khan Baba Restaurant",
-    description: "Pakistani cuisine — same taste from Lahore to Sydney. Order direct for delivery, pick-up or dine-in.",
+    description:
+      "Pakistani cuisine — same taste from Lahore to Sydney. Order direct for delivery, pick-up or dine-in.",
     images: ["/images/feast.jpg"],
     type: "website",
   },
@@ -28,8 +30,12 @@ export const viewport: Viewport = {
   initialScale: 1,
 };
 
-export default function RootLayout({ children }: { children: React.ReactNode }) {
-  const settings = getSettings();
+export default async function RootLayout({
+  children,
+}: {
+  children: React.ReactNode;
+}) {
+  const settings = await getSettings();
   const restaurant = {
     name: settings.restaurant_name,
     address: settings.restaurant_address,

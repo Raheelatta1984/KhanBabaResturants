@@ -9,7 +9,8 @@ export const dynamic = "force-dynamic";
 
 export const metadata: Metadata = {
   title: "What's new",
-  description: "Every new portal, menu change and fix shipped to the Khan Baba platform, documented release by release.",
+  description:
+    "Every new portal, menu change and fix shipped to the Khan Baba platform, documented release by release.",
 };
 
 type Entry = {
@@ -21,7 +22,7 @@ type Entry = {
   version: string | null;
   pr_number: number | null;
   pr_url: string | null;
-  pinned: number;
+  pinned: boolean;
   published_at: string;
 };
 
@@ -41,53 +42,105 @@ const CATEGORY_BADGE: Record<string, string> = {
   ops: "badge-muted",
 };
 
-export default async function WhatsNewPage({ searchParams }: { searchParams: Promise<{ category?: string }> }) {
+export default async function WhatsNewPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ category?: string }>;
+}) {
   const { category } = await searchParams;
-  const db = getDb();
-  const all = db
-    .prepare("SELECT * FROM whats_new ORDER BY pinned DESC, datetime(published_at) DESC, id DESC")
-    .all() as Entry[];
-  const entries = category && category !== "all" ? all.filter((entry) => entry.category === category) : all;
+  const db = await getDb();
+  const all = await db.query<Entry>(
+    "SELECT * FROM whats_new ORDER BY pinned DESC, published_at DESC, id DESC",
+  );
+  const entries =
+    category && category !== "all"
+      ? all.filter((entry) => entry.category === category)
+      : all;
 
   return (
     <>
       <section className="whatsnew-hero">
         <div className="container">
           <span className="eyebrow">Release feed</span>
-          <h1 style={{ margin: "14px 0 12px", fontSize: "clamp(2.2rem, 5vw, 3.6rem)" }}>
+          <h1
+            style={{
+              margin: "14px 0 12px",
+              fontSize: "clamp(2.2rem, 5vw, 3.6rem)",
+            }}
+          >
             What&apos;s new at Khan Baba.
           </h1>
           <p className="muted" style={{ maxWidth: "62ch" }}>
-            We ship the restaurant and the software together. Every portal, menu change and fix is logged here — the
-            same notes our team reads on Monday morning.
+            We ship the restaurant and the software together. Every portal, menu
+            change and fix is logged here — the same notes our team reads on
+            Monday morning.
           </p>
-          <div style={{ display: "flex", gap: 20, marginTop: 24, flexWrap: "wrap" }}>
+          <div
+            style={{
+              display: "flex",
+              gap: 20,
+              marginTop: 24,
+              flexWrap: "wrap",
+            }}
+          >
             <div>
-              <div className="tiny" style={{ color: "var(--muted-2)", letterSpacing: "0.1em", textTransform: "uppercase" }}>
+              <div
+                className="tiny"
+                style={{
+                  color: "var(--muted-2)",
+                  letterSpacing: "0.1em",
+                  textTransform: "uppercase",
+                }}
+              >
                 Latest release
               </div>
               <div className="strong">{all[0]?.version ?? "1.0.0"}</div>
             </div>
             <div>
-              <div className="tiny" style={{ color: "var(--muted-2)", letterSpacing: "0.1em", textTransform: "uppercase" }}>
+              <div
+                className="tiny"
+                style={{
+                  color: "var(--muted-2)",
+                  letterSpacing: "0.1em",
+                  textTransform: "uppercase",
+                }}
+              >
                 Updates published
               </div>
               <div className="strong">{all.length}</div>
             </div>
             <div>
-              <div className="tiny" style={{ color: "var(--muted-2)", letterSpacing: "0.1em", textTransform: "uppercase" }}>
+              <div
+                className="tiny"
+                style={{
+                  color: "var(--muted-2)",
+                  letterSpacing: "0.1em",
+                  textTransform: "uppercase",
+                }}
+              >
                 Last change
               </div>
-              <div className="strong">{all[0] ? formatDate(all[0].published_at.slice(0, 10)) : "—"}</div>
+              <div className="strong">
+                {all[0] ? formatDate(all[0].published_at.slice(0, 10)) : "—"}
+              </div>
             </div>
           </div>
 
           <div className="wn-tabs">
-            <Link href="/whats-new" className="chip" data-active={!category || category === "all" ? "true" : "false"}>
+            <Link
+              href="/whats-new"
+              className="chip"
+              data-active={!category || category === "all" ? "true" : "false"}
+            >
               Everything
             </Link>
             {Object.entries(CATEGORY_LABELS).map(([key, label]) => (
-              <Link key={key} href={`/whats-new?category=${key}`} className="chip" data-active={category === key ? "true" : "false"}>
+              <Link
+                key={key}
+                href={`/whats-new?category=${key}`}
+                className="chip"
+                data-active={category === key ? "true" : "false"}
+              >
                 {label}
               </Link>
             ))}
@@ -105,22 +158,52 @@ export default async function WhatsNewPage({ searchParams }: { searchParams: Pro
                 <Reveal key={entry.id} delay={Math.min(index * 50, 200)}>
                   <article className="wn-card">
                     <div>
-                      <div className="when">{formatDateTime(entry.published_at)}</div>
-                      {entry.version ? <div className="badge" style={{ marginTop: 8 }}>v{entry.version}</div> : null}
+                      <div className="when">
+                        {formatDateTime(entry.published_at)}
+                      </div>
+                      {entry.version ? (
+                        <div className="badge" style={{ marginTop: 8 }}>
+                          v{entry.version}
+                        </div>
+                      ) : null}
                     </div>
                     <div>
-                      <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
-                        <span className={`badge ${CATEGORY_BADGE[entry.category] ?? "badge-muted"}`}>
+                      <div
+                        style={{
+                          display: "flex",
+                          gap: 8,
+                          flexWrap: "wrap",
+                          alignItems: "center",
+                        }}
+                      >
+                        <span
+                          className={`badge ${CATEGORY_BADGE[entry.category] ?? "badge-muted"}`}
+                        >
                           {CATEGORY_LABELS[entry.category] ?? entry.category}
                         </span>
-                        {entry.pinned ? <span className="badge badge-amber">Pinned</span> : null}
+                        {entry.pinned ? (
+                          <span className="badge badge-amber">Pinned</span>
+                        ) : null}
                       </div>
                       <h3 style={{ marginTop: 12 }}>{entry.title}</h3>
                       <p>{entry.summary}</p>
                       {entry.body ? <p className="body">{entry.body}</p> : null}
                       {entry.pr_url ? (
-                        <a href={entry.pr_url} target="_blank" rel="noreferrer" className="tiny" style={{ color: "var(--accent)", display: "inline-flex", gap: 6, alignItems: "center", marginTop: 12 }}>
-                          <Icon name="arrow" size={12} /> Pull request #{entry.pr_number}
+                        <a
+                          href={entry.pr_url}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="tiny"
+                          style={{
+                            color: "var(--accent)",
+                            display: "inline-flex",
+                            gap: 6,
+                            alignItems: "center",
+                            marginTop: 12,
+                          }}
+                        >
+                          <Icon name="arrow" size={12} /> Pull request #
+                          {entry.pr_number}
                         </a>
                       ) : null}
                     </div>
@@ -134,10 +217,17 @@ export default async function WhatsNewPage({ searchParams }: { searchParams: Pro
             <Icon name="sparkle" size={15} />
             <span>
               Shipping a change? Add a release note from{" "}
-              <Link href="/admin/whats-new" style={{ color: "var(--accent)", textDecoration: "underline" }}>
+              <Link
+                href="/admin/whats-new"
+                style={{ color: "var(--accent)", textDecoration: "underline" }}
+              >
                 Admin → What&apos;s new
               </Link>{" "}
-              or run <code style={{ color: "var(--text)" }}>scripts/whats-new.mjs</code> against your git history.
+              or run{" "}
+              <code style={{ color: "var(--text)" }}>
+                scripts/whats-new.mjs
+              </code>{" "}
+              against your git history.
             </span>
           </div>
         </div>

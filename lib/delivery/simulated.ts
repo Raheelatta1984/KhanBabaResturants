@@ -6,7 +6,8 @@ import type {
   ProviderStatus,
   QuoteRequest,
 } from "./types";
-import { getSetting } from "../settings";
+import type { Db } from "../db";
+import { getSettings, settingValue } from "../settings";
 
 function hash(input: string): number {
   let h = 2166136261;
@@ -17,8 +18,9 @@ function hash(input: string): number {
   return Math.abs(h);
 }
 
-function restaurantAddress(): string {
-  return getSetting(
+function restaurantAddress(settings: Record<string, string>): string {
+  return settingValue(
+    settings,
     "restaurant_address",
     "Shop 4, 379 Pitt Street, Sydney NSW 2000",
   );
@@ -34,8 +36,16 @@ const STATUS_SEQUENCE = ["accepted", "pickup", "dropoff", "delivered"] as const;
 export class SimulatedProvider implements DeliveryProvider {
   name = "simulated";
   live = false;
+  private db?: Db;
 
-  private quotes = new Map<string, { expiresAt: number; feeCents: number; eta: number }>();
+  constructor(db?: Db) {
+    this.db = db;
+  }
+
+  private quotes = new Map<
+    string,
+    { expiresAt: number; feeCents: number; eta: number }
+  >();
 
   private feeFor(address: string, orderValueCents: number) {
     const seed = hash(address.trim().toLowerCase());
@@ -44,18 +54,25 @@ export class SimulatedProvider implements DeliveryProvider {
     const perKm = 215;
     const smallOrderLevy = orderValueCents < 3500 ? 150 : 0;
     const surge = (seed % 7 === 0 ? 1.12 : 1) * 1.0;
-    const feeCents = Math.round((base + perKm * distanceKm + smallOrderLevy) * surge);
+    const feeCents = Math.round(
+      (base + perKm * distanceKm + smallOrderLevy) * surge,
+    );
     return { feeCents, distanceKm, eta: 24 + (seed % 17) };
   }
 
   async quote(request: QuoteRequest): Promise<ProviderQuote> {
+    const settings = await getSettings();
     const { feeCents, eta } = this.feeFor(
       `${request.dropoffAddress}|${request.dropoffPostcode ?? ""}`,
       request.orderValueCents,
     );
     const quoteId = `sim_q_${hash(request.dropoffAddress + request.orderCode).toString(36)}`;
     const expiresAt = new Date(Date.now() + 15 * 60 * 1000).toISOString();
-    this.quotes.set(quoteId, { expiresAt: Date.now() + 15 * 60 * 1000, feeCents, eta });
+    this.quotes.set(quoteId, {
+      expiresAt: Date.now() + 15 * 60 * 1000,
+      feeCents,
+      eta,
+    });
     return {
       provider: this.name,
       quoteId,
@@ -64,7 +81,7 @@ export class SimulatedProvider implements DeliveryProvider {
       expiresAt,
       live: false,
       raw: {
-        pickup_address: restaurantAddress(),
+        pickup_address: restaurantAddress(settings),
         dropoff_address: request.dropoffAddress,
         fee: feeCents,
         currency: "AUD",
@@ -75,8 +92,12 @@ export class SimulatedProvider implements DeliveryProvider {
   async dispatch(request: DispatchRequest): Promise<DispatchResult> {
     const quote = this.quotes.get(request.quoteId);
     const deliveryId = `sim_d_${hash(request.quoteId + request.orderCode).toString(36)}`;
-    const courierFirst = ["Adeel", "Sana", "Bilal", "Farhan", "Hamza", "Zara"][hash(deliveryId) % 6];
-    const courierLast = ["K.", "R.", "M.", "S.", "A."][hash(deliveryId + "x") % 5];
+    const courierFirst = ["Adeel", "Sana", "Bilal", "Farhan", "Hamza", "Zara"][
+      hash(deliveryId) % 6
+    ];
+    const courierLast = ["K.", "R.", "M.", "S.", "A."][
+      hash(deliveryId + "x") % 5
+    ];
     return {
       provider: this.name,
       deliveryId,
@@ -93,16 +114,22 @@ export class SimulatedProvider implements DeliveryProvider {
     // Local simulation advances through milestones on a 90-second cadence.
     const seed = hash(deliveryId);
     const minutes = Math.floor((Date.now() / 60000) % 6);
-    const status = STATUS_SEQUENCE[Math.min(3, Math.floor((minutes + (seed % 3)) / 2))];
+    const status =
+      STATUS_SEQUENCE[Math.min(3, Math.floor((minutes + (seed % 3)) / 2))];
     return { status, etaMinutes: Math.max(4, 32 - minutes * 5) };
   }
 }
 
-export function simulatedQuoteFee(address: string, orderValueCents: number): number {
+export function simulatedQuoteFee(
+  address: string,
+  orderValueCents: number,
+): number {
   const provider = new SimulatedProvider();
   const seed = hash(address.trim().toLowerCase());
   const distanceKm = 1.2 + (seed % 900) / 100;
-  return Math.round(349 + 215 * distanceKm + (orderValueCents < 3500 ? 150 : 0));
+  return Math.round(
+    349 + 215 * distanceKm + (orderValueCents < 3500 ? 150 : 0),
+  );
 }
 
 export { STATUS_SEQUENCE };

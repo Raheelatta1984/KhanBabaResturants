@@ -4,39 +4,49 @@ import { MenuEditor, type EditorItem } from "@/components/portal/MenuEditor";
 
 export const dynamic = "force-dynamic";
 
-export default async function EditDishPage({ params }: { params: Promise<{ id: string }> }) {
+export default async function EditDishPage({
+  params,
+}: {
+  params: Promise<{ id: string }>;
+}) {
   const { id } = await params;
-  const db = getDb();
-  const item = db.prepare("SELECT * FROM menu_items WHERE id = ?").get(Number(id)) as
-    | {
-        id: number;
-        name: string;
-        slug: string;
-        tagline: string | null;
-        description: string | null;
-        category_id: number | null;
-        image: string | null;
-        youtube_id: string | null;
-        ingredients: string | null;
-        allergens: string | null;
-        spice_levels: string;
-        prep_minutes: number;
-        is_veg: number;
-        is_available: number;
-        is_featured: number;
-        is_new: number;
-        published: number;
-      }
-    | undefined;
-  if (!item) notFound();
-
-  const variants = db
-    .prepare("SELECT * FROM item_variants WHERE item_id = ? AND active = 1 ORDER BY sort_order, id")
-    .all(item.id) as { id: number; label: string; size_ml: number | null; price_cents: number; is_default: number }[];
-  const categories = db.prepare("SELECT id, name FROM categories WHERE active = 1 ORDER BY sort_order").all() as {
+  const db = await getDb();
+  const item = await db.maybeOne<{
     id: number;
     name: string;
-  }[];
+    slug: string;
+    tagline: string | null;
+    description: string | null;
+    category_id: number | null;
+    image: string | null;
+    youtube_id: string | null;
+    ingredients: string | null;
+    allergens: string | null;
+    spice_levels: string;
+    prep_minutes: number;
+    is_veg: number;
+    is_available: number;
+    is_featured: number;
+    is_new: number;
+    published: boolean;
+  }>("SELECT * FROM menu_items WHERE id = $1", [Number(id)]);
+  if (!item) notFound();
+
+  const [variants, categories] = await Promise.all([
+    db.query<{
+      id: number;
+      label: string;
+      size_ml: number | null;
+      price_cents: number;
+      is_default: boolean;
+    }>(
+      "SELECT * FROM item_variants WHERE item_id = $1 AND active ORDER BY sort_order, id",
+      [item.id],
+    ),
+    db.query<{ id: number; name: string }>(
+      "SELECT id, name FROM categories WHERE active ORDER BY sort_order",
+    ),
+  ]);
 
   const initial: EditorItem = {
     id: item.id,
@@ -49,7 +59,9 @@ export default async function EditDishPage({ params }: { params: Promise<{ id: s
     youtube: item.youtube_id ?? "",
     ingredients: item.ingredients ?? "",
     allergens: item.allergens ?? "",
-    spiceLevels: item.spice_levels ? item.spice_levels.split(",").filter(Boolean) : [],
+    spiceLevels: item.spice_levels
+      ? item.spice_levels.split(",").filter(Boolean)
+      : [],
     prepMinutes: item.prep_minutes,
     isVeg: Boolean(item.is_veg),
     isAvailable: Boolean(item.is_available),
@@ -70,9 +82,16 @@ export default async function EditDishPage({ params }: { params: Promise<{ id: s
       <div className="page-head">
         <div>
           <h1>{item.name}</h1>
-          <p>Editing a live dish — changes appear on the website immediately.</p>
+          <p>
+            Editing a live dish — changes appear on the website immediately.
+          </p>
         </div>
-        <a href={`/menu/${item.slug}`} target="_blank" rel="noreferrer" className="btn btn-outline btn-sm">
+        <a
+          href={`/menu/${item.slug}`}
+          target="_blank"
+          rel="noreferrer"
+          className="btn btn-outline btn-sm"
+        >
           Preview on site
         </a>
       </div>

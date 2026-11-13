@@ -12,7 +12,8 @@ export const DEFAULT_SETTINGS: Record<string, string> = {
   restaurant_country: "AU",
   restaurant_lat: "-33.8688",
   restaurant_lng: "151.2093",
-  restaurant_hours: "Mon–Thu 11:00–22:00 · Fri–Sat 11:00–23:00 · Sun 11:00–22:00",
+  restaurant_hours:
+    "Mon–Thu 11:00–22:00 · Fri–Sat 11:00–23:00 · Sun 11:00–22:00",
   timezone: "Australia/Sydney",
 
   // Delivery pricing (we quote Uber Direct live, then apply a service margin)
@@ -46,39 +47,98 @@ export const DEFAULT_SETTINGS: Record<string, string> = {
   pay_at_counter_enabled: "1",
   reviews_require_approval: "1",
   priority_base_fee_cents: "250",
+
+  // Media
+  media_driver: "auto", // auto | blob | gdrive | local
+  gdrive_folder_id: "",
 };
 
-export function getSetting(key: string, fallback = ""): string {
-  const db = getDb();
-  const row = db.prepare("SELECT value FROM settings WHERE key = ?").get(key) as { value: string } | undefined;
+/**
+ * Number of database round trips matters on a serverless platform, so a request
+ * caches the whole settings table once and reads from memory after that.
+ *
+ * `getSettingsCached()` is the request-scoped accessor used by the UI; the
+ * `getSetting(key)` helpers fall back to a query whenever nothing was loaded.
+ */
+const cache = new WeakMap<Db, Record<string, string>>();
+
+export async function getSetting(key: string, fallback = ""): Promise<string> {
+  const db = await getDb();
+  const row = await db.maybeOne<{ value: string }>(
+    "SELECT value FROM settings WHERE key = $1",
+    [key],
+  );
   return row?.value ?? DEFAULT_SETTINGS[key] ?? fallback;
 }
 
-export function getSettingNumber(key: string, fallback = 0): number {
-  const value = Number.parseFloat(getSetting(key, String(fallback)));
+export async function getSettingNumber(
+  key: string,
+  fallback = 0,
+): Promise<number> {
+  const value = Number.parseFloat(await getSetting(key, String(fallback)));
   return Number.isFinite(value) ? value : fallback;
 }
 
-export function getSettings(): Record<string, string> {
-  const db = getDb();
-  const rows = db.prepare("SELECT key, value FROM settings").all() as { key: string; value: string }[];
+export async function getSettings(): Promise<Record<string, string>> {
+  const db = await getDb();
+  const cached = cache.get(db);
+  if (cached) return cached;
+  const rows = await db.query<{ key: string; value: string }>(
+    "SELECT key, value FROM settings",
+  );
   const out: Record<string, string> = { ...DEFAULT_SETTINGS };
   for (const row of rows) out[row.key] = row.value;
+  cache.set(db, out);
   return out;
 }
 
-export function setSetting(key: string, value: string, db: Db = getDb()): void {
-  db.prepare(
-    "INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
-  ).run(key, value);
+/** Read a setting from an already-loaded settings object (no query). */
+export function settingValue(
+  settings: Record<string, string>,
+  key: string,
+  fallback = "",
+): string {
+  return settings[key] ?? DEFAULT_SETTINGS[key] ?? fallback;
 }
 
-export function setSettings(entries: Record<string, string>, db: Db = getDb()): void {
-  const stmt = db.prepare(
-    "INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+export function settingNumber(
+  settings: Record<string, string>,
+  key: string,
+  fallback = 0,
+): number {
+  const value = Number.parseFloat(
+    settingValue(settings, key, String(fallback)),
   );
-  const tx = db.transaction((rows: [string, string][]) => {
-    for (const [key, value] of rows) stmt.run(key, value);
+  return Number.isFinite(value) ? value : fallback;
+}
+
+export async function setSetting(
+  key: string,
+  value: string,
+  db?: Db,
+): Promise<void> {
+  const handle = db ?? (await getDb());
+  await handle.query(
+    "INSERT INTO settings (key, value) VALUES ($1, $2) ON CONFLICT (key) DO UPDATE SET value = excluded.value",
+    [key, value],
+  );
+  cache.delete(handle);
+}
+
+export async function setSettings(
+  entries: Record<string, string>,
+  db?: Db,
+): Promise<void> {
+  const handle = db ?? (await getDb());
+  const rows = Object.entries(entries);
+  if (rows.length === 0) return;
+  await handle.transaction(async (tx) => {
+    for (const [key, value] of rows) {
+      await tx.query(
+        "INSERT INTO settings (key, value) VALUES ($1, $2) ON CONFLICT (key) DO UPDATE SET value = excluded.value",
+        [key, value],
+      );
+    }
   });
-  tx(Object.entries(entries));
+  cache.delete(handle);
 }

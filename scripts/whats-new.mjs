@@ -8,11 +8,10 @@
  *   node scripts/whats-new.mjs --pr 12 --title "…" --summary "…" --publish
  *
  * Without --publish it prints ready-to-paste entries for the admin console.
- * With --publish it writes straight into the local SQLite database.
+ * With --publish it writes straight into the Postgres database in DATABASE_URL.
+ * Every PR should ship with one of these notes.
  */
 import { execSync } from "node:child_process";
-import fs from "node:fs";
-import path from "node:path";
 
 const args = process.argv.slice(2);
 function flag(name, fallback = undefined) {
@@ -31,61 +30,66 @@ function print(entries) {
   );
 }
 
-function publish(entries) {
-  const dir = process.env.KB_DATA_DIR || path.join(process.cwd(), "data");
-  const file = path.join(dir, "khanbaba.db");
-  if (!fs.existsSync(file)) {
-    console.error(`No database at ${file}. Run the app or "npm run seed" first.`);
+async function connect() {
+  const url = (
+    process.env.DATABASE_URL ||
+    process.env.POSTGRES_URL ||
+    ""
+  ).trim();
+  if (!url) {
+    console.error(
+      "DATABASE_URL is not set. Add your Neon connection string to .env.local (or your shell) " +
+        "before using --publish/--list.",
+    );
     process.exit(1);
   }
-  const { default: Database } = await import("better-sqlite3");
-  const db = new Database(file);
-  db.exec(`CREATE TABLE IF NOT EXISTS whats_new (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    title TEXT NOT NULL, summary TEXT NOT NULL, body TEXT,
-    category TEXT NOT NULL DEFAULT 'feature', version TEXT, pr_number INTEGER, pr_url TEXT,
-    pinned INTEGER NOT NULL DEFAULT 0, published_at TEXT NOT NULL DEFAULT (datetime('now'))
-  )`);
-  const insert = db.prepare(
-    `INSERT INTO whats_new (title, summary, body, category, version, pr_number, pr_url, pinned)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-  );
+  const { neon } = await import("@neondatabase/serverless");
+  return neon(url);
+}
+
+async function publish(entries) {
+  const sql = await connect();
+  const { SCHEMA_SQL } = await import("../lib/db/schema");
+  const { splitStatements } = await import("../lib/db/driver");
+  for (const statement of splitStatements(SCHEMA_SQL)) {
+    await sql.query(statement);
+  }
   let count = 0;
   for (const entry of entries) {
-    insert.run(
-      entry.title,
-      entry.summary,
-      entry.body ?? null,
-      CATEGORIES.includes(entry.category) ? entry.category : "feature",
-      entry.version ?? null,
-      entry.pr_number ?? null,
-      entry.pr_url ?? null,
-      0,
+    await sql.query(
+      `INSERT INTO whats_new (title, summary, body, category, version, pr_number, pr_url, pinned)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, FALSE)`,
+      [
+        entry.title,
+        entry.summary,
+        entry.body ?? null,
+        CATEGORIES.includes(entry.category) ? entry.category : "feature",
+        entry.version ?? null,
+        entry.pr_number ?? null,
+        entry.pr_url ?? null,
+      ],
     );
     count += 1;
   }
-  db.close();
-  console.log(`Published ${count} entr${count === 1 ? "y" : "ies"} to ${file}`);
+  console.log(
+    `Published ${count} entr${count === 1 ? "y" : "ies"} to Postgres`,
+  );
 }
 
 if (flag("list")) {
-  const dir = process.env.KB_DATA_DIR || path.join(process.cwd(), "data");
-  const file = path.join(dir, "khanbaba.db");
-  if (!fs.existsSync(file)) {
-    console.error("No local database yet.");
-    process.exit(1);
-  }
-  const { default: Database } = await import("better-sqlite3");
-  const db = new Database(file, { readonly: true });
-  const rows = db.prepare("SELECT id, title, category, version, pr_number, published_at FROM whats_new ORDER BY id DESC").all();
+  const sql = await connect();
+  const rows = await sql.query(
+    "SELECT id, title, category, version, pr_number, published_at FROM whats_new ORDER BY id DESC",
+  );
   console.table(rows);
-  db.close();
   process.exit(0);
 }
 
 if (flag("from-git")) {
   const limit = Number(flag("limit", 10));
-  const text = execSync(`git log -n ${limit} --pretty=format:"%h%x09%s"`, { encoding: "utf8" });
+  const text = execSync(`git log -n ${limit} --pretty=format:"%h%x09%s"`, {
+    encoding: "utf8",
+  });
   const entries = text
     .split("\n")
     .filter(Boolean)
@@ -96,18 +100,26 @@ if (flag("from-git")) {
       const prNumber = prMatch ? Number(prMatch[1]) : null;
       const clean = subject.replace(/\(#\d+\)/, "").trim();
       const [rawTitle, ...bodyParts] = clean.split(":");
-      const title = rawTitle.replace(/^Merge pull request #\d+ from \S+/, "Merged contribution").trim();
+      const title = rawTitle
+        .replace(/^Merge pull request #\d+ from \S+/, "Merged contribution")
+        .trim();
       return {
         title: title.charAt(0).toUpperCase() + title.slice(1),
         summary: bodyParts.join(":").trim() || `${clean} (${hash})`,
         body: clean,
-        category: /fix/i.test(clean) ? "fix" : /portal/i.test(clean) ? "portal" : "feature",
+        category: /fix/i.test(clean)
+          ? "fix"
+          : /portal/i.test(clean)
+            ? "portal"
+            : "feature",
         version: flag("version", "1.1.0"),
         pr_number: prNumber,
-        pr_url: prNumber ? `https://github.com/Raheelatta1984/KhanBabaResturants/pull/${prNumber}` : null,
+        pr_url: prNumber
+          ? `https://github.com/Raheelatta1984/KhanBabaResturants/pull/${prNumber}`
+          : null,
       };
     });
-  if (flag("publish")) publish(entries);
+  if (flag("publish")) await publish(entries);
   else print(entries);
   process.exit(0);
 }
@@ -115,7 +127,9 @@ if (flag("from-git")) {
 const title = flag("title");
 const summary = flag("summary");
 if (!title || !summary) {
-  console.error("Usage: node scripts/whats-new.mjs --title \"…\" --summary \"…\" [--pr 12] [--publish]");
+  console.error(
+    'Usage: node scripts/whats-new.mjs --title "…" --summary "…" [--pr 12] [--publish]',
+  );
   process.exit(1);
 }
 
@@ -128,9 +142,11 @@ const entries = [
     category: flag("category", "feature"),
     version: flag("version", "1.1.0"),
     pr_number: prNumber,
-    pr_url: prNumber ? `https://github.com/Raheelatta1984/KhanBabaResturants/pull/${prNumber}` : null,
+    pr_url: prNumber
+      ? `https://github.com/Raheelatta1984/KhanBabaResturants/pull/${prNumber}`
+      : null,
   },
 ];
 
-if (flag("publish")) publish(entries);
+if (flag("publish")) await publish(entries);
 else print(entries);

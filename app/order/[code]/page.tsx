@@ -10,7 +10,8 @@ export const dynamic = "force-dynamic";
 
 export const metadata: Metadata = {
   title: "Track your order",
-  description: "Follow your Khan Baba order from the counter to the kitchen to your door.",
+  description:
+    "Follow your Khan Baba order from the counter to the kitchen to your door.",
   robots: { index: false },
 };
 
@@ -23,8 +24,8 @@ export default async function OrderTrackingPage({
 }) {
   const { code } = await params;
   const query = await searchParams;
-  const db = getDb();
-  const payload = publicOrderPayload(db, code);
+  const db = await getDb();
+  const payload = await publicOrderPayload(db, code);
   if (!payload) notFound();
 
   const justPlaced = query.new === "1" || query.paid === "1";
@@ -32,10 +33,21 @@ export default async function OrderTrackingPage({
   return (
     <section className="section-tight" style={{ paddingTop: 32 }}>
       <div className="container">
-        <nav className="tiny muted" style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 18, flexWrap: "wrap" }}>
+        <nav
+          className="tiny muted"
+          style={{
+            display: "flex",
+            gap: 8,
+            alignItems: "center",
+            marginBottom: 18,
+            flexWrap: "wrap",
+          }}
+        >
           <Link href="/">Home</Link> <span>/</span>
           <Link href="/menu">Menu</Link> <span>/</span>
-          <span style={{ color: "var(--text)" }}>Order {payload.order.code}</span>
+          <span style={{ color: "var(--text)" }}>
+            Order {payload.order.code}
+          </span>
         </nav>
 
         <TrackingView initial={payload} justPlaced={justPlaced} />
@@ -43,8 +55,9 @@ export default async function OrderTrackingPage({
         <div className="notice" style={{ marginTop: 24 }}>
           <Icon name="shield" size={15} />
           <span>
-            This tracking link is unique to your order — save it or keep the tab open. Our team sees exactly the same
-            status in the kitchen and delivery portals.
+            This tracking link is unique to your order — save it or keep the tab
+            open. Our team sees exactly the same status in the kitchen and
+            delivery portals.
           </span>
         </div>
       </div>
