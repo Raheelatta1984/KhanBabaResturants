@@ -43,17 +43,18 @@ async function connect() {
     );
     process.exit(1);
   }
-  const { neon } = await import("@neondatabase/serverless");
-  return neon(url);
+  // Reuse the app's own driver so `--publish` also works against PGlite (handy
+  // for trying a note locally) and shares the schema/placeholder handling.
+  const { createNeonDb, createPgliteDb, isPgliteUrl } =
+    await import("../lib/db/driver");
+  return isPgliteUrl(url) ? createPgliteDb(url) : createNeonDb(url);
 }
 
 async function publish(entries) {
   const sql = await connect();
   const { SCHEMA_SQL } = await import("../lib/db/schema");
   const { splitStatements } = await import("../lib/db/driver");
-  for (const statement of splitStatements(SCHEMA_SQL)) {
-    await sql.query(statement);
-  }
+  await sql.exec(SCHEMA_SQL);
   let count = 0;
   for (const entry of entries) {
     await sql.query(
@@ -78,6 +79,8 @@ async function publish(entries) {
 
 if (flag("list")) {
   const sql = await connect();
+  const { SCHEMA_SQL } = await import("../lib/db/schema");
+  await sql.exec(SCHEMA_SQL);
   const rows = await sql.query(
     "SELECT id, title, category, version, pr_number, published_at FROM whats_new ORDER BY id DESC",
   );
