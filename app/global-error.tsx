@@ -1,6 +1,11 @@
 "use client";
 
 import { useEffect } from "react";
+import {
+  DatabaseSetupSteps,
+  isDatabaseIssue,
+  useDiagnosis,
+} from "@/components/DatabaseHelp";
 
 /**
  * Last-resort error boundary.

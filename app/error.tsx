@@ -1,19 +1,16 @@
 "use client";
 
 import { useEffect } from "react";
+import {
+  DatabaseSetupSteps,
+  isDatabaseIssue,
+  useDiagnosis,
+} from "@/components/DatabaseHelp";
 
 /**
- * `app/error.tsx` is the boundary Next.js renders for a page that throws, and it
- * is a *client* component — so the error's message is all it can inspect. The one
- * setup mistake that takes the whole site down is an unconfigured database, so
- * recognise it here and show the fix instead of "we could not load this page".
+ * Page-level boundary. A failure here is usually setup rather than a real bug,
+ * so ask `/api/health` what is wrong before showing a generic apology.
  */
-function looksLikeDatabaseSetup(message: string) {
-  return /DATABASE_URL|Neon|ECONNREFUSED|ENOTFOUND|getaddrinfo|password authentication/i.test(
-    message,
-  );
-}
-
 export default function Error({
   error,
   reset,
@@ -21,11 +18,13 @@ export default function Error({
   error: Error & { digest?: string };
   reset: () => void;
 }) {
+  const diagnosis = useDiagnosis();
+
   useEffect(() => {
     console.error("Khan Baba page error", error.digest, error.message);
   }, [error]);
 
-  const database = looksLikeDatabaseSetup(error.message ?? "");
+  const database = isDatabaseIssue(diagnosis);
 
   return (
     <section
@@ -42,21 +41,13 @@ export default function Error({
             : "We could not load this page."}
         </h1>
         {database ? (
-          <>
-            <p className="muted">
-              This deployment cannot reach Postgres, so there is nowhere to read
-              the menu from. Set <code>DATABASE_URL</code> to your Neon pooled
-              connection string in Vercel → Settings → Environment Variables
-              (Production and Preview), then redeploy. The schema and demo menu
-              are created automatically on the first request.
-            </p>
-            <p className="muted tiny">
-              Status:{" "}
-              <a href="/api/health" style={{ color: "var(--amber, #f3ab3f)" }}>
-                /api/health
-              </a>
-            </p>
-          </>
+          <DatabaseSetupSteps
+            detail={
+              diagnosis.state === "database-unreachable"
+                ? diagnosis.detail
+                : undefined
+            }
+          />
         ) : (
           <p className="muted">
             Our team has the details. Try again, or head back to the menu — your
