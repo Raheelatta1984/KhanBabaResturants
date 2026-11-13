@@ -1504,6 +1504,14 @@ async function seedWhatsNew(db: Database) {
       "-1 hours",
     ],
     [
+      "Dish photos in your own Google Drive",
+      "Upload dish photos to Google Drive or Vercel Blob — both keep working after a redeploy.",
+      "Photos are no longer saved on the server's temporary disk. Connect a Vercel Blob store or a Google Drive folder (shared with the app's service account) and every upload is stored durably, with the URL saved on the dish so the menu can display it anywhere.",
+      "improvement",
+      1,
+      "-1 hours",
+    ],
+    [
       "New dish onboarding with video",
       "Upload photos, paste a YouTube link, publish when ready.",
       "Add a dish with images, ingredients, allergens, spice levels and container sizes. A YouTube link plays inline in the dish page using the privacy-enhanced player — no third-party widget or tracking script on the site.",
@@ -1512,9 +1520,9 @@ async function seedWhatsNew(db: Database) {
       "-1 hours",
     ],
     [
-      "Runs anywhere, including Vercel previews",
-      "Cloud previews now start with a working database and a health check.",
-      "The schema ships inside the server bundle instead of being read from disk, and when a host has no persistent volume the database is created in temporary storage and seeded automatically. Admin shows a preview-storage notice in that mode, and /api/health reports whether storage is persistent.",
+      "One database for every server instance",
+      "The platform now runs on Postgres (Neon) instead of a local SQL file.",
+      "Orders, menu changes, stock and cost postings are stored in a single durable Postgres database shared by every server instance. Storage used to be per-instance and reset on redeploy; now a redeploy, a cold start or a second server sees exactly the same data. The schema and demo data are created automatically the first time the app connects — no migration step — and /api/health reports the database it is talking to plus live row counts.",
       "ops",
       1,
       "0 minutes",

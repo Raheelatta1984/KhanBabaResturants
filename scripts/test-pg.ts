@@ -695,7 +695,15 @@ async function main() {
   const whatsNew = await db.query<{ title: string }>(
     "SELECT title FROM whats_new ORDER BY pinned DESC, published_at DESC",
   );
-  check("release feed seeded", whatsNew.length >= 8, whatsNew.length);
+  check("release feed seeded", whatsNew.length >= 9, whatsNew.length);
+  check(
+    "this release is announced (Postgres migration)",
+    whatsNew.some((entry) => entry.title.includes("One database")),
+  );
+  check(
+    "photo storage release note present",
+    whatsNew.some((entry) => entry.title.includes("Google Drive")),
+  );
   check("pinned entry first", whatsNew[0].title === "Order online, your way");
   const staffCount = await count(db, "staff");
   check("five demo staff accounts", staffCount === 5, staffCount);
