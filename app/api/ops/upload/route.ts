@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import fs from "node:fs";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
+import { getUploadsDir } from "@/lib/db/paths";
 import { getApiSession } from "@/lib/auth/api";
 
 export const dynamic = "force-dynamic";
@@ -33,7 +34,7 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "Images must be under 6 MB" }, { status: 413 });
   }
 
-  const dir = path.join(process.env.KB_DATA_DIR || path.join(process.cwd(), "data"), "uploads");
+  const dir = getUploadsDir();
   fs.mkdirSync(dir, { recursive: true });
   const filename = `${Date.now().toString(36)}-${randomUUID().slice(0, 8)}.${extension}`;
   const buffer = Buffer.from(await file.arrayBuffer());

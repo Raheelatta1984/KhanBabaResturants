@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import { getUploadsDir } from "@/lib/db/paths";
 
 const TYPES: Record<string, string> = {
   jpg: "image/jpeg",
@@ -14,8 +15,7 @@ export async function GET(_request: Request, context: { params: Promise<{ name: 
   const { name } = await context.params;
   if (!/^[a-zA-Z0-9._-]+$/.test(name)) return new Response("Not found", { status: 404 });
 
-  const dir = path.join(process.env.KB_DATA_DIR || path.join(process.cwd(), "data"), "uploads");
-  const file = path.join(dir, name);
+  const file = path.join(getUploadsDir(), name);
   if (!fs.existsSync(file)) return new Response("Not found", { status: 404 });
 
   const extension = name.split(".").pop()?.toLowerCase() ?? "";

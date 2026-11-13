@@ -180,15 +180,54 @@ npm run whatsnew     # release-note helper
 Copy `.env.example` to `.env.local`. Only `SESSION_SECRET` and `PUBLIC_BASE_URL` matter for a local run; every
 integration degrades to a clearly-labelled sandbox mode.
 
-## Production notes
+## Deployment
 
-- SQLite is single-node but fully transactional and WAL-enabled — fine for a restaurant. To scale horizontally, port the
-  schema (`lib/db/schema.sql`) to Postgres and swap `getDb()` for a Pool; all queries are standard SQL.
-- Uploaded images are written to `data/uploads` and served through `/api/media/[name]` with immutable caching. Point
-  `KB_DATA_DIR` at a persistent volume, or replace the upload handler with S3.
-- Put the app behind HTTPS, set a strong `SESSION_SECRET`, keep the SQLite file backed up, and configure both webhooks.
-- The seeded address, phone and email are placeholders — update them in **Admin → Pricing & holidays → Restaurant
-  profile** before going live.
+### Vercel / serverless (preview)
+The repo deploys to Vercel as-is — previews work, with one deliberate caveat:
+
+- Serverless functions get a **read-only** bundle, so the SQLite database is created in the platform temp directory
+  (`/tmp/khanbaba`) and seeded on first request. That means the app runs fully (menu, ordering, portals, QR) but **data
+  is per-instance and resets on redeploy**. The admin portal shows a "preview storage" banner while this is true.
+- The schema is embedded at build time (`lib/db/schema.ts`, generated from `lib/db/schema.sql` by `npm run schema:build`)
+  so no loose SQL files need to be traced into the function, and `outputFileTracingIncludes` keeps the native
+  `better-sqlite3` binary in the bundle.
+- `vercel.json` pins the `syd1` (Sydney) region — the restaurant, kitchen and guests are all in one city.
+- Set `PUBLIC_BASE_URL` (or rely on Vercel's `VERCEL_PROJECT_PRODUCTION_URL`) so QR codes, sitemap and payment
+  redirects point at the right host.
+
+To make a Vercel deployment durable, point `KB_DATA_DIR` at a writable volume (Fly.io, Railway, Render, a VPS) — or port
+the database layer to Postgres. All queries are plain SQL and the schema is portable:
+
+1. Translate `lib/db/schema.sql` (SQLite types → `SERIAL`/`TIMESTAMPTZ`/`NUMERIC`).
+2. Replace `getDb()` in `lib/db/index.ts` with a connection pool; keep the `Db` type shape (`prepare().get/all/run`) or
+   wrap `pg` in a thin adapter so the rest of the app is unchanged.
+3. Move uploads to object storage by swapping `getUploadsDir()` usage in `app/api/ops/upload/route.ts` and
+   `app/api/media/[name]/route.ts` for signed S3/R2 URLs.
+
+Recommended production path today: **Fly.io, Railway or a small VPS with a persistent volume** — deploy the Next.js
+server as-is, set `KB_DATA_DIR=/data`, mount the volume, and SQLite (WAL) comfortably handles a single restaurant.
+
+### Self-hosting
+```bash
+npm ci
+npm run build
+KB_DATA_DIR=/var/lib/khanbaba PUBLIC_BASE_URL=https://www.khanbabarestaurant.com.au \
+  SESSION_SECRET="$(openssl rand -hex 32)" npm run start
+```
+Put it behind HTTPS, back up `khanbaba.db` plus `uploads/`, and configure both webhooks
+(`/api/webhooks/uber`, `/api/webhooks/stripe`).
+
+### Checking a deployment
+`GET /api/health` returns `{ ok, storage: "persistent" | "ephemeral", counts }`. If a deployment shows an error page,
+check it first: `ephemeral` on a host without a volume means the database was recreated in temp storage, and `ok: false`
+returns the database error message (usually a missing/unwritable `KB_DATA_DIR`).
+
+### Operational checklist
+- Update restaurant name, phone, email and address in **Admin → Pricing & holidays → Restaurant profile** (the seeded
+  values are placeholders).
+- Add real Uber Direct and Stripe credentials, then switch providers in **Admin → Delivery & payments**.
+- Print table QR codes from **Admin → Tables & QR codes**.
+- Add a What's New entry for every release (`npm run whatsnew` or the admin publisher).
 
 ## Roadmap
 
