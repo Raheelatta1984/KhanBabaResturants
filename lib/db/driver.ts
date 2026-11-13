@@ -205,17 +205,6 @@ function isServerless(): boolean {
   );
 }
 
-function hasExplicitSsl(connectionString: string): boolean {
-  try {
-    const url = new URL(connectionString);
-    return ["ssl", "sslmode", "sslrootcert", "sslnegotiation"].some((key) =>
-      url.searchParams.has(key),
-    );
-  } catch {
-    return false;
-  }
-}
-
 function hostOf(connectionString: string): string {
   try {
     return new URL(connectionString).hostname;
@@ -234,13 +223,44 @@ export function isSupabasePooler(connectionString: string): boolean {
   return /pooler\.supabase\.(com|net)$/i.test(hostOf(connectionString));
 }
 
-function poolConfig(connectionString: string, max?: number): PoolConfig {
-  const host = hostOf(connectionString);
-  const local = host === "localhost" || host === "127.0.0.1" || host === "";
+/**
+ * Turn a connection string into node-postgres options — explicitly, rather than
+ * handing the string to `pg` and hoping.
+ *
+ * `pg` re-parses `connectionString` *over* whatever else you pass
+ * (`Object.assign({}, config, parse(connectionString))`), so an explicit `ssl`
+ * is silently discarded whenever the URL contains an SSL parameter. Supabase's
+ * copy-button strings include `?sslmode=require`, which `pg` maps to "verify the
+ * certificate" — and Supavisor serves a certificate the default trust store
+ * rejects ("self-signed certificate in certificate chain"). Every query then
+ * fails with what looks like a network problem. Splitting the URL into fields
+ * keeps the TLS policy ours:
+ *
+ *  - localhost / `sslmode=disable` → no TLS
+ *  - `sslmode=verify-full` (or `PGSSL_VERIFY=full`) → verify, as asked
+ *  - everything else → TLS without CA verification, which is what
+ *    `sslmode=require` means to libpq and what Supabase documents for poolers
+ */
+export function postgresConfig(
+  connectionString: string,
+  max?: number,
+): PoolConfig {
+  let url: URL | null = null;
+  try {
+    url = new URL(connectionString);
+  } catch {
+    url = null;
+  }
+
+  const host = url?.hostname ?? "";
+  const isLocal = host === "localhost" || host === "127.0.0.1" || host === "::1" || host === "";
+  const sslmode = (url?.searchParams.get("sslmode") ?? "").toLowerCase();
+  const verifyFull = sslmode === "verify-full" || /^(full|true)$/i.test(process.env.PGSSL_VERIFY ?? "");
+
   const config: PoolConfig = {
-    connectionString,
-    // One connection per function instance is all a request needs, and a small
-    // cap keeps a traffic spike from exhausting the database's connection limit.
+    // A small pool: one connection per function instance is all a request
+    // needs, and a cap keeps a traffic spike from exhausting the database's
+    // connection limit (Supavisor's transaction mode multiplexes them anyway).
     max: max ?? Number(process.env.DATABASE_POOL_MAX ?? (isServerless() ? 1 : 5)),
     idleTimeoutMillis: 10_000,
     connectionTimeoutMillis: 15_000,
@@ -248,11 +268,23 @@ function poolConfig(connectionString: string, max?: number): PoolConfig {
     application_name: "khanbaba",
     types: customTypes,
   };
-  // Supabase requires TLS. When the URL carries no sslmode (a copy/paste of the
-  // bare "postgresql://…@…pooler.supabase.com:6543/postgres"), enable it here so
-  // the connection fails with a clear authentication error instead of hang.
-  if (!local && !hasExplicitSsl(connectionString))
-    config.ssl = { rejectUnauthorized: false };
+
+  if (url) {
+    config.host = host;
+    if (url.port) config.port = Number(url.port);
+    if (url.username) config.user = decodeURIComponent(url.username);
+    if (url.password) config.password = decodeURIComponent(url.password);
+    const database = decodeURIComponent(url.pathname.replace(/^\//, ""));
+    if (database) config.database = database;
+  } else {
+    // Not URL-shaped: let node-postgres have the raw string and skip TLS
+    // decisions here (used by tests and unusual socket strings).
+    config.connectionString = connectionString;
+  }
+
+  if (isLocal || sslmode === "disable") config.ssl = false;
+  else config.ssl = { rejectUnauthorized: verifyFull };
+
   return config;
 }
 
@@ -270,7 +302,7 @@ export function createPostgresDb(
   connectionString: string,
   options: { max?: number } = {},
 ): Db {
-  const pool = new Pool(poolConfig(connectionString, options.max));
+  const pool = new Pool(postgresConfig(connectionString, options.max));
 
   // A pooled client can die between requests (Supabase restarts, network blip).
   // Without a listener that surfaces as an unhandled 'error' event and takes the

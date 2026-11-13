@@ -189,6 +189,7 @@ npm run dev          # dev server on 0.0.0.0:3000
 npm run build        # production build
 npm run start        # production server
 npm run seed         # migrate + seed the Supabase database (add -- --reset to wipe)
+npm run db:check     # dial the configured database and say exactly what is wrong
 npm run test:pg      # whole data layer against PGlite — no database needed
 npm run typecheck    # tsc --noEmit
 npm run schema:build # regenerate lib/db/schema.ts from schema.sql
@@ -223,13 +224,19 @@ per-instance state.
 The project is **khanbaba** on Supabase (`phjsppfyhlgeznhiaqsc`, `ap-southeast-2` = Sydney).
 
 1. Supabase → **khanbaba** → **Connect** → **Connection pooling** → copy the **Transaction** string (port `6543`):
-   `postgresql://postgres.phjsppfyhlgeznhiaqsc:PASSWORD@aws-0-ap-southeast-2.pooler.supabase.com:6543/postgres`
+   `postgresql://postgres.phjsppfyhlgeznhiaqsc:PASSWORD@aws-1-ap-southeast-2.pooler.supabase.com:6543/postgres`
+   (the pooler number in the host — `aws-0` / `aws-1` — follows the copy button; both work.)
    - Use the **pooler**, not the direct `db.<ref>.supabase.co` host: the direct host resolves to IPv6 only and is not
      reachable from Vercel's functions.
    - Transaction mode is fine for everything this app does (the driver uses unnamed statements, and any transaction is
      pinned to one checked-out connection). Port `5432` on the same host is session mode if you prefer it.
    - If the password contains `@ : / ? #`, URL-encode those characters, or reset it in
-     **Project Settings → Database**.
+     **Project Settings → Database**. The driver decodes them exactly once.
+   - TLS: node-postgres normally re-parses the URL over any explicit `ssl` option, so a
+     `?sslmode=require` string ends up *verifying* Supavisor's certificate and failing with
+     `self-signed certificate in certificate chain`. `lib/db/driver.ts` builds the options itself: no
+     TLS for localhost, no CA verification for `require`/`prefer`/`no-verify`, real verification only
+     for `sslmode=verify-full` (or `PGSSL_VERIFY=full`).
 2. Set `DATABASE_URL` in **Vercel → Project → Settings → Environment Variables** for **Production** _and_ **Preview**
    (and in `.env.local` for development). A variable that exists with an **empty value** counts as missing — the app
    reports `blank-connection-string` on `/api/health` so this cannot masquerade as a code bug again.
@@ -298,7 +305,9 @@ that reads the menu fails on its first query.
    - `storage: "unconfigured"` with `reason: "missing-connection-string"` — no `DATABASE_URL` at all.
    - `storage: "unconfigured"` with `reason: "blank-connection-string"` — the variable exists but its value is empty
      (this was the live outage).
+   - `reason: "invalid-connection-string"` — an `https://` REST URL, or the IPv6-only direct host.
    - `reason: "authentication-failed"` — wrong password; re-copy the pooler string, URL-encoding special characters.
+   - `reason: "tls-verification-failed"` — certificate rejected (see the TLS note above).
    - `reason: "unreachable"` — wrong host/region, or the project is paused.
 2. Confirm the variable exists for **both** Production and Preview: `vercel env ls` or Settings → Environment
    Variables. Vercel only injects variables set _before_ a build, so adding one requires a redeploy.
