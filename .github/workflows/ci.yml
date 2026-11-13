@@ -1,0 +1,38 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    env:
+      KB_DATA_DIR: ${{ github.workspace }}/.ci-data
+      SESSION_SECRET: ci-only-secret
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: Typecheck
+        run: npm run typecheck
+      - name: Seed database
+        run: npm run seed
+      - name: Build
+        run: npm run build
+      - name: Smoke test the running server
+        run: |
+          npm run start & 
+          for i in $(seq 1 30); do
+            if curl -sf http://localhost:3000/ > /dev/null; then break; fi
+            sleep 2
+          done
+          curl -sf http://localhost:3000/menu > /dev/null
+          curl -sf http://localhost:3000/whats-new > /dev/null
+          curl -sf http://localhost:3000/api/quote -X POST -H 'content-type: application/json' \
+            -d '{"channel":"pickup","items":[{"variantId":1,"qty":1}]}' > /dev/null
+          echo "Smoke tests passed"
