@@ -1,0 +1,22 @@
+node_modules/
+.next/
+out/
+build/
+dist/
+coverage/
+
+# Local database + uploaded media (runtime state, not source)
+data/*.db
+data/*.db-*
+data/uploads/*
+!data/uploads/.gitkeep
+
+.env
+.env.local
+.env*.local
+
+.DS_Store
+*.log
+next-env.d.ts
+tsconfig.tsbuildinfo
+.vercel

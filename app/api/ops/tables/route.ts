@@ -1,0 +1,53 @@
+import { NextResponse } from "next/server";
+import { getDb } from "@/lib/db";
+import { getApiSession } from "@/lib/auth/api";
+
+export const dynamic = "force-dynamic";
+
+export async function POST(request: Request) {
+  const session = await getApiSession(["admin", "manager"]);
+  if (!session) return NextResponse.json({ error: "Not authorised" }, { status: 401 });
+
+  let body: Record<string, unknown>;
+  try {
+    body = (await request.json()) as Record<string, unknown>;
+  } catch {
+    return NextResponse.json({ error: "Invalid request" }, { status: 400 });
+  }
+
+  const db = getDb();
+  const action = String(body.action ?? "");
+
+  if (action === "create") {
+    const code = String(body.code ?? "").trim().toUpperCase();
+    const name = String(body.name ?? "").trim();
+    if (!/^[A-Z0-9-]{2,8}$/.test(code)) {
+      return NextResponse.json({ error: "Table code must be 2–8 letters/numbers, e.g. T13" }, { status: 400 });
+    }
+    if (!name) return NextResponse.json({ error: "Give the table a name" }, { status: 400 });
+    const exists = db.prepare("SELECT id FROM dining_tables WHERE code = ?").get(code);
+    if (exists) return NextResponse.json({ error: "That table code already exists" }, { status: 409 });
+    db.prepare("INSERT INTO dining_tables (code, name, zone, seats) VALUES (?, ?, ?, ?)").run(
+      code,
+      name,
+      String(body.zone ?? "").trim() || null,
+      Number(body.seats ?? 4),
+    );
+    return NextResponse.json({ ok: true }, { status: 201 });
+  }
+
+  if (action === "toggle") {
+    const id = Number(body.id);
+    const row = db.prepare("SELECT active FROM dining_tables WHERE id = ?").get(id) as { active: number } | undefined;
+    if (!row) return NextResponse.json({ error: "Table not found" }, { status: 404 });
+    db.prepare("UPDATE dining_tables SET active = ? WHERE id = ?").run(row.active ? 0 : 1, id);
+    return NextResponse.json({ ok: true });
+  }
+
+  if (action === "delete") {
+    db.prepare("DELETE FROM dining_tables WHERE id = ?").run(Number(body.id));
+    return NextResponse.json({ ok: true });
+  }
+
+  return NextResponse.json({ error: "Unknown action" }, { status: 400 });
+}
