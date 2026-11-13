@@ -141,6 +141,7 @@ export async function GET() {
     const authFailed = /password authentication failed|SASL|no pg_hba|role .* does not exist/i.test(
       message,
     );
+    const tlsFailed = /certificate|self.signed|SSL|TLS/i.test(message);
     return NextResponse.json(
       {
         ok: false,
@@ -150,11 +151,15 @@ export async function GET() {
         projectRef: dbRef,
         reason: authFailed
           ? "authentication-failed"
-          : unreachable
-            ? "unreachable"
-            : "query-failed",
+          : tlsFailed
+            ? "tls-verification-failed"
+            : unreachable
+              ? "unreachable"
+              : "query-failed",
         error: message,
-        hint: authFailed
+        hint: tlsFailed
+          ? "TLS was rejected. Append ?sslmode=require to DATABASE_URL (the driver then uses Supabase's certificate without CA verification); set PGSSL_VERIFY=full only if your pooler hostname has a publicly trusted certificate."
+          : authFailed
           ? "The password in DATABASE_URL is wrong (or was reset in Supabase → Project Settings → Database). Copy the pooler string again, URL-encoding any special characters in the password."
           : unreachable
             ? "The database host could not be reached. Check the project is not paused and that the pooler host in DATABASE_URL matches your project's region."

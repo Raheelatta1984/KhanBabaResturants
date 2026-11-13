@@ -69,6 +69,7 @@ import {
   createSqlFromClient,
   customTypes,
   isSupabasePooler,
+  postgresConfig,
   splitStatements,
   type Db,
 } from "../lib/db/driver";
@@ -908,6 +909,59 @@ async function main() {
       "-- a comment; with a semicolon\nCREATE TABLE a (x TEXT DEFAULT 'y;z'); /* b; */ SELECT 1;",
     ).length === 2,
   );
+  // pg re-parses connectionString over an explicit `ssl` option, and Supabase's
+  // copy-button string includes ?sslmode=require — which pg turns into "verify
+  // the certificate", failing against Supavisor's chain. These pin the split.
+  const poolerBare =
+    "postgresql://postgres.phjsppfyhlgeznhiaqsc:p%40ss@aws-1-ap-southeast-2.pooler.supabase.com:6543/postgres";
+  const bareConfig = postgresConfig(poolerBare, 2);
+  check(
+    "connection string is split into fields",
+    bareConfig.host === "aws-1-ap-southeast-2.pooler.supabase.com" &&
+      bareConfig.port === 6543 &&
+      bareConfig.user === "postgres.phjsppfyhlgeznhiaqsc" &&
+      bareConfig.database === "postgres",
+    bareConfig,
+  );
+  check(
+    "URL-encoded password is decoded exactly once",
+    bareConfig.password === "p@ss",
+    bareConfig.password,
+  );
+  check(
+    "no sslmode → TLS without CA verification",
+    (bareConfig.ssl as { rejectUnauthorized?: boolean }).rejectUnauthorized ===
+      false,
+  );
+  for (const mode of ["require", "prefer", "no-verify"]) {
+    const config = postgresConfig(`${poolerBare}?sslmode=${mode}`);
+    check(
+      `sslmode=${mode} still connects (certificate not rejected)`,
+      (config.ssl as { rejectUnauthorized?: boolean }).rejectUnauthorized ===
+        false,
+    );
+  }
+  check(
+    "sslmode=verify-full is respected when asked for",
+    (
+      postgresConfig(`${poolerBare}?sslmode=verify-full`).ssl as {
+        rejectUnauthorized?: boolean;
+      }
+    ).rejectUnauthorized === true,
+  );
+  check(
+    "sslmode=disable turns TLS off",
+    postgresConfig(`${poolerBare}?sslmode=disable`).ssl === false,
+  );
+  check(
+    "localhost needs no TLS",
+    postgresConfig("postgresql://u:p@localhost:5432/khanbaba").ssl === false,
+  );
+  check(
+    "pool size is capped for serverless",
+    postgresConfig(poolerBare, 1).max === 1,
+  );
+
   check(
     "int8 and numeric parse as JS numbers",
     customTypes.getTypeParser(20)("42") === 42 &&
