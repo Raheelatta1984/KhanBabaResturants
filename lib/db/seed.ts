@@ -1195,6 +1195,7 @@ export async function seedDatabase(db: Database): Promise<{ seeded: boolean }> {
 
     await seedSettings(tx);
     await seedStaff(tx);
+    await seedCustomers(tx);
     await seedTables(tx);
     await seedPricing(tx);
     await seedCategoriesAndMenu(tx);
@@ -1231,6 +1232,30 @@ async function seedStaff(db: Database) {
     await db.query(
       "INSERT INTO staff (name, email, role, password_hash) VALUES ($1, $2, $3, $4)",
       [name, email, role, password],
+    );
+  }
+}
+
+/**
+ * Demo customer accounts, so the portal has a face to sign in with and the
+ * seeded orders have somewhere to hang their history. Password for both is the
+ * same demo password as the staff logins.
+ */
+async function seedCustomers(db: Database) {
+  const password = hashPassword("KhanBaba2026!");
+  const customers: [string, string, string, string, string, string][] = [
+    ["Ayesha Khan", "ayesha@example.com", "0412 345 678", "12/48 Pirrama Road", "Pyrmont", "2009"],
+    ["Daniel Mercer", "daniel@example.com", "0433 987 654", "25 Harris Street", "Pyrmont", "2009"],
+  ];
+  for (const [name, email, phone, address, suburb, postcode] of customers) {
+    const id = await db.insert(
+      `INSERT INTO customers (name, email, phone, password_hash, address, suburb, postcode, guest, last_order_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, FALSE, now()) RETURNING id`,
+      [name, email, phone, password, address, suburb, postcode],
+    );
+    await db.query(
+      `INSERT INTO customer_activity (customer_id, kind, detail) VALUES ($1, 'signup', 'Account created')`,
+      [id],
     );
   }
 }
@@ -1528,6 +1553,14 @@ async function seedWhatsNew(db: Database) {
       "0 minutes",
     ],
     [
+      "Accounts and a tracking link for every order",
+      "Sign in (or don't) — your order history, saved address and a private tracking link now travel with you.",
+      "Ordering never needed a login and still doesn't: the menu, table QR codes, counter walk-ins and the tracking link all work signed out. What is new is the option to keep it. Create an account and the checkout is prefilled, past orders are listed with a one-tap reorder, and every order you place appears in one place. Each order also gets a private tracking link (/t/…) that is unguessable rather than derived from the order code, with copy, share, SMS and email buttons — and /track finds an order from either a code or a pasted link. Guests who ordered before signing up keep their history: signing up with the same email attaches it, and the counter can text a one-time link that claims the order into an account. The counter also gained a customer search, so a phone call can be answered without an order code.",
+      "feature",
+      1,
+      "0 minutes",
+    ],
+    [
       "Moved to Supabase: database and photos",
       "The platform's database and dish photography now live in Supabase, in Sydney.",
       "The app had been written against Neon while the project had already moved to Supabase, so the deployment had a connection string it could not use and every page fell back to the setup screen. The data layer now speaks plain Postgres over Supabase's connection pooler (transaction mode, port 6543), with the connection string resolved from DATABASE_URL — blanks now count as missing rather than as configured — and the schema is still created automatically on the first request. Dish photos upload to the menu-photos bucket in Supabase Storage and are served from its CDN, so nothing depends on a Vercel function's temporary disk. /api/health reports which project, which pooler mode and which media driver are in use.",
@@ -1556,6 +1589,14 @@ async function seedWhatsNew(db: Database) {
   await db.query(
     "UPDATE whats_new SET pinned = TRUE WHERE title = 'Order online, your way'",
   );
+}
+
+/**
+ * A stable tracking token for a seeded order, so the demo tracking link is
+ * predictable (`/t/demo-kb-demo01-token`) instead of random on every seed.
+ */
+function demoTrackingToken(code: string): string {
+  return `demo-${code.toLowerCase()}-token`;
 }
 
 async function seedProductionAndOrders(db: Database) {
@@ -1803,16 +1844,17 @@ async function seedProductionAndOrders(db: Database) {
     ].includes(demo.status);
 
     const orderId = await db.insert(
-      `INSERT INTO orders (code, channel, table_id, customer_name, phone, email, address, suburb, postcode, notes,
+      `INSERT INTO orders (code, tracking_token, channel, table_id, customer_name, phone, email, address, suburb, postcode, notes,
         subtotal_cents, surcharge_cents, surcharge_detail, priority, priority_fee_cents, delivery_fee_cents,
         delivery_cost_cents, total_cents, payment_method, payment_status, payment_ref, status, progress,
         created_at, updated_at, confirmed_at, kitchen_started_at, ready_at, dispatched_at)
-       VALUES ($1, $2, $3, $4, $5, NULL, $6, $7, $8, NULL, $9, $10, '[]', $11, $12, $13, $14, $15, $16, $17, $18,
-        $19, $20, now() - $21::interval, now() - $21::interval,
-        now() - $22::interval, now() - $23::interval, now() - $24::interval, NULL)
+       VALUES ($1, $2, $3, $4, $5, $6, NULL, $7, $8, $9, NULL, $10, $11, '[]', $12, $13, $14, $15, $16, $17, $18, $19,
+        $20, $21, now() - $22::interval, now() - $22::interval,
+        now() - $23::interval, now() - $24::interval, now() - $25::interval, NULL)
        RETURNING id`,
       [
         demo.code,
+        demoTrackingToken(demo.code),
         demo.channel,
         demo.tableId ?? null,
         demo.name,
@@ -1901,17 +1943,32 @@ async function seedProductionAndOrders(db: Database) {
     }
   }
 
+  // Attach the demo orders to the demo customer accounts, so signing in as
+  // ayesha@example.com shows a real order history rather than an empty page.
+  await db.query(
+    `UPDATE orders o SET customer_id = c.id
+     FROM customers c
+     WHERE o.customer_id IS NULL AND lower(o.customer_name) = lower(c.name)`,
+  );
+  await db.query(
+    `UPDATE customers c SET last_order_at = latest.created_at
+     FROM (SELECT customer_id, MAX(created_at) AS created_at FROM orders
+           WHERE customer_id IS NOT NULL GROUP BY customer_id) latest
+     WHERE latest.customer_id = c.id`,
+  );
+
   // A completed delivery from earlier today, so reports have history.
   const completedId = await db.insert(
-    `INSERT INTO orders (code, channel, customer_name, phone, address, suburb, postcode, subtotal_cents, surcharge_cents,
+    `INSERT INTO orders (code, tracking_token, channel, customer_name, phone, address, suburb, postcode, subtotal_cents, surcharge_cents,
       surcharge_detail, priority, priority_fee_cents, delivery_fee_cents, delivery_cost_cents, total_cents,
       payment_method, payment_status, payment_ref, status, progress, created_at, updated_at, confirmed_at,
       kitchen_started_at, ready_at, dispatched_at, completed_at)
-     VALUES ('KB-DEMO06', 'delivery', 'Michael Rourke', '0466 555 444', '25 Harris Street', 'Pyrmont', '2009',
+     VALUES ('KB-DEMO06', $1, 'delivery', 'Michael Rourke', '0466 555 444', '25 Harris Street', 'Pyrmont', '2009',
       4198, 0, '[]', FALSE, 0, 649, 555, 4847, 'online', 'paid', 'sim_pi_demo06', 'completed', 100,
       now() - interval '4 hours', now() - interval '3 hours', now() - interval '4 hours', now() - interval '4 hours',
       now() - interval '3 hours', now() - interval '3 hours', now() - interval '2 hours')
      RETURNING id`,
+    [demoTrackingToken("KB-DEMO06")],
   );
   await db.query(
     `INSERT INTO order_items (order_id, item_id, variant_id, name, variant_label, size_ml, spice_level, qty,

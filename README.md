@@ -39,7 +39,19 @@ Password for every demo account: **`KhanBaba2026!`**
 | Admin    | `/admin`    | `admin@khanbaba.com.au`    | Everything                           |
 | Manager  | `/admin`    | `manager@khanbaba.com.au`  | Everything except admin-only actions |
 
-Demo customer flows: `/table/T04` (table QR), `/menu` → checkout, `/order/KB-DEMO01` (live tracking).
+### Demo customer accounts
+
+Same password, **`KhanBaba2026!`**:
+
+| Customer          | Email                | What is in there                   |
+| ----------------- | -------------------- | ---------------------------------- |
+| Ayesha Khan       | `ayesha@example.com` | Seeded orders, saved delivery address |
+| Daniel Mercer     | `daniel@example.com` | Completed click & collect history   |
+
+Demo customer flows: `/table/T04` (table QR), `/menu` → checkout, `/order/KB-DEMO01`
+(live tracking by code), `/t/demo-kb-demo01-token` (the shareable link), `/track`
+(find an order from a code *or* a link), `/login` (sign in / create an account),
+`/account` (history, live orders, saved details).
 
 ---
 
@@ -56,11 +68,22 @@ Demo customer flows: `/table/T04` (table QR), `/menu` → checkout, `/order/KB-D
 - **Live order tracking** (`/order/[code]`) polling every 6 seconds: percentage complete, per-item prep state, courier
   details and full event log.
 - **Table QR ordering** (`/table/[code]`): scan, order, counter confirms, kitchen cooks, guest watches progress.
+- **Optional customer accounts** (`/login`, `/account`): ordering never requires a login — browsing, table QR,
+  counter walk-ins and the tracking link all work signed out. An account adds order history, one-tap reorder, a
+  saved delivery address that prefills checkout, and a single place to find a live order. Signing up with the email
+  used for a guest order sweeps that history into the account.
+- **Shareable tracking link** (`/t/[token]`): every order gets a 16-byte tracking token at creation, so the link a
+  customer keeps, texts to whoever is collecting or reopens on another device cannot be guessed from an order code.
+  The page offers copy / native share / SMS / email, and `/track` resolves either a code or a pasted link.
+- **One-time claim links** (`/claim/[token]`): for guest orders the counter can mint a single-use link that attaches
+  the order to an account without a password. Only the SHA-256 of the token is stored, and it is redeemed on a button
+  press so a mail-scanner prefetch cannot burn it.
 
 ### Staff portals
 
 - **Counter** — accept (auto-routes to kitchen and can jump the counter straight to the ticket), mark cash/card paid,
-  cancel, hand over collections.
+  cancel, hand over collections, and look a customer up by name, email or mobile (including guest orders not yet
+  linked to an account) at **Counter → Customers**.
 - **Kitchen display** — queue / on the fire / packed columns, per-item prep ticking (drives the customer percentage),
   bump-to-ready, elapsed timers, priority flags, plus the production panel for naan, roti and prep batches.
 - **Delivery desk** — re-quote at dispatch, see courier cost vs customer charge and margin, request the courier,
@@ -84,6 +107,9 @@ Demo customer flows: `/table/T04` (table QR), `/menu` → checkout, `/order/KB-D
 - **Order state machine** (`lib/orders.ts`): pending → confirmed → preparing → ready → out for delivery/collection →
   completed, with progress percentages, event log and refund handling on cancel.
 - **Auth**: scrypt password hashes, HMAC-signed HTTP-only session cookies, role-based middleware on every portal route.
+  Staff and customer cookies are signed with the same secret but carry different `aud` claims, so one can never be
+  replayed as the other. Customer sessions last 30 days; every query is scoped by the id inside the signed cookie,
+  never by anything the browser sends.
 
 ---
 

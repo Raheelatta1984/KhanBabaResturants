@@ -66,6 +66,24 @@ import {
 } from "../lib/settings";
 import { verifyPassword } from "../lib/auth/password";
 import {
+  claimOrdersForEmail,
+  createClaimToken,
+  publicCustomer,
+  getCustomerByEmail,
+  redeemClaimToken,
+  setCustomerPassword,
+  signinCustomer,
+  signupCustomer,
+  upsertGuestCustomer,
+  verifyCustomerToken,
+} from "../lib/auth/customer";
+import { signToken, verifyToken } from "../lib/auth/token";
+import {
+  getOrderByTrackingToken,
+  listCustomerOrders,
+  resolveOrderRef,
+} from "../lib/orders";
+import {
   createSqlFromClient,
   customTypes,
   isSupabasePooler,
@@ -138,6 +156,8 @@ async function main() {
     "pricing_rules",
     "holidays",
     "dining_tables",
+    "customers",
+    "customer_activity",
     "orders",
     "order_items",
     "order_events",
@@ -149,7 +169,7 @@ async function main() {
     const rows = await count(db, table);
     check(`${table} has rows (${rows})`, rows > 0);
   }
-  check("all 20 tables exist", tables.length === 20);
+  check("all 22 tables exist", tables.length === 22);
 
   // the schema is idempotent: applying it again must not error
   await db.exec(SCHEMA_SQL);
@@ -414,6 +434,239 @@ async function main() {
   check(
     "collection completes the order",
     collected.status === "completed" && collected.progress === 100,
+  );
+
+  section("Customer accounts, tracking links and claiming");
+  // 1. The signed-token primitive: a token signed for one audience must not be
+  //    accepted as another, and tampering must fail.
+  const staffish = await signToken({ id: 1, name: "x", aud: "staff" }, 60);
+  check(
+    "a staff-audience token is not a customer session",
+    (await verifyCustomerToken(staffish)) === null,
+  );
+  const customerTok = await signToken({ id: 1, name: "x", aud: "customer" }, 60);
+  check(
+    "a customer token verifies",
+    (await verifyCustomerToken(customerTok))?.email === "x" ||
+      (await verifyCustomerToken(customerTok)) !== null,
+  );
+  check(
+    "tampering with the payload invalidates the signature",
+    (await verifyToken(customerTok.replace(/.$/, (c) => (c === "A" ? "B" : "A")))) === null,
+  );
+  check(
+    "an expired token is rejected",
+    (await verifyToken(await signToken({ id: 1 }, -5))) === null,
+  );
+
+  // 2. Sign-up, sign-in and the guest-to-account upgrade path.
+  const signup = await signupCustomer(db, {
+    name: "Test Diner",
+    email: "Test.Diner@Example.com",
+    password: "correct horse battery",
+    phone: "0411 000 111",
+  });
+  check("signup creates an account", signup.customer.id > 0);
+  check(
+    "the email is normalised to lowercase",
+    signup.customer.email === "test.diner@example.com",
+  );
+  check(
+    "signup issues a customer-audience session",
+    (await verifyCustomerToken(signup.token))?.id === signup.customer.id,
+  );
+  check(
+    "the public customer shape never includes the password hash",
+    !("password_hash" in publicCustomer(signup.customer)) &&
+      "email" in publicCustomer(signup.customer),
+  );
+  let duplicateRejected = false;
+  try {
+    await signupCustomer(db, {
+      name: "Impostor",
+      email: "test.diner@example.com",
+      password: "another password",
+    });
+  } catch {
+    duplicateRejected = true;
+  }
+  check("a duplicate signup is rejected", duplicateRejected);
+  let weakRejected = false;
+  try {
+    await signupCustomer(db, { name: "Short", email: "s@e.com", password: "1234" });
+  } catch {
+    weakRejected = true;
+  }
+  check("a short password is rejected", weakRejected);
+  const signin = await signinCustomer(db, {
+    email: "test.diner@example.com",
+    password: "correct horse battery",
+  });
+  check("sign-in works with the same password", signin.customer.id === signup.customer.id);
+  let wrongRejected = false;
+  try {
+    await signinCustomer(db, {
+      email: "test.diner@example.com",
+      password: "wrong password",
+    });
+  } catch {
+    wrongRejected = true;
+  }
+  check("the wrong password is rejected", wrongRejected);
+
+  // 3. An anonymous checkout creates a guest row; registering upgrades it in
+  //    place and pulls the earlier order into the account.
+  const guest = await upsertGuestCustomer(db, {
+    name: "Guest Orders",
+    email: "guest@example.com",
+    phone: "0422 333 444",
+  });
+  check("checkout creates a guest customer row", guest?.guest === true);
+  const guestOrder = await createOrder(db, {
+    channel: "pickup",
+    customerName: "Guest Orders",
+    email: "guest@example.com",
+    phone: "0422 333 444",
+    paymentMethod: "counter",
+    items: [{ itemId: items[0].id, variantId: items[0].variants[0].id, qty: 1 }],
+  });
+  check(
+    "the guest order is attached to the guest customer",
+    guestOrder.order.customer_id === guest!.id,
+  );
+  check(
+    "every order gets an unguessable tracking token",
+    Boolean(guestOrder.trackingToken) && guestOrder.trackingToken!.length >= 20,
+  );
+  const upgraded = await signupCustomer(db, {
+    name: "Guest Orders",
+    email: "guest@example.com",
+    password: "now-i-have-a-password",
+  });
+  check(
+    "signing up with the guest email upgrades the same row",
+    upgraded.customer.id === guest!.id && upgraded.customer.guest === false,
+  );
+  const guestHistory = await listCustomerOrders(db, upgraded.customer.id);
+  check(
+    "the earlier guest order is now in the account history",
+    guestHistory.some((entry) => entry.order.code === guestOrder.order.code),
+  );
+
+  // 4. Tracking tokens: resolve by token, by code, and via the generic ref.
+  const byToken = await getOrderByTrackingToken(db, guestOrder.trackingToken!);
+  check("an order resolves from its tracking token", byToken?.code === guestOrder.order.code);
+  check(
+    "resolveOrderRef handles a code",
+    (await resolveOrderRef(db, guestOrder.order.code))?.id === guestOrder.order.id,
+  );
+  check(
+    "resolveOrderRef handles a token",
+    (await resolveOrderRef(db, guestOrder.trackingToken!))?.id === guestOrder.order.id,
+  );
+  check(
+    "a made-up token finds nothing",
+    (await getOrderByTrackingToken(db, "not-a-real-token")) === null,
+  );
+  const payload = await publicOrderPayload(db, guestOrder.order.code);
+  check(
+    "the public payload carries the tracking token",
+    payload?.trackingToken === guestOrder.trackingToken,
+  );
+
+  // 5. Claim links: single use, hashed at rest.
+  const claimOrder = await createOrder(db, {
+    channel: "pickup",
+    customerName: "Claim Me",
+    email: "claim@example.com",
+    phone: "0433 000 111",
+    paymentMethod: "counter",
+    items: [{ itemId: items[0].id, variantId: items[0].variants[0].id, qty: 1 }],
+  });
+  const claimToken = await createClaimToken(db, {
+    id: claimOrder.order.id,
+    code: claimOrder.order.code,
+    email: "claim@example.com",
+  });
+  check("a claim link is issued for an order with an email", Boolean(claimToken));
+  const storedClaim = await db.one<{ token_hash: string }>(
+    "SELECT token_hash FROM order_claims WHERE order_id = $1",
+    [claimOrder.order.id],
+  );
+  check(
+    "only the hash of the claim token is stored",
+    storedClaim.token_hash !== claimToken && /^[0-9a-f]{64}$/.test(storedClaim.token_hash),
+  );
+  const redeemed = await redeemClaimToken(db, claimToken!);
+  check(
+    "redeeming a claim link signs in the guest",
+    redeemed.customer.email === "claim@example.com",
+  );
+  check(
+    "redeeming attaches the order to the account",
+    (await getOrderById(db, claimOrder.order.id))?.customer_id === redeemed.customer.id,
+  );
+  const withPassword = await setCustomerPassword(
+    db,
+    redeemed.customer.id,
+    "brand new password",
+  );
+  check(
+    "a claimed guest can set a password and stop being a guest",
+    withPassword.guest === false && Boolean(withPassword.password_hash),
+  );
+  check(
+    "the new password signs in",
+    (await signinCustomer(db, {
+      email: redeemed.customer.email,
+      password: "brand new password",
+    })).customer.id === redeemed.customer.id,
+  );
+  check(
+    "the claim signs in with a working session",
+    (await verifyCustomerToken(redeemed.token))?.id === redeemed.customer.id,
+  );
+  let replayRejected = false;
+  try {
+    await redeemClaimToken(db, claimToken!);
+  } catch {
+    replayRejected = true;
+  }
+  check("a claim link cannot be used twice", replayRejected);
+  let bogusRejected = false;
+  try {
+    await redeemClaimToken(db, "not-a-token");
+  } catch {
+    bogusRejected = true;
+  }
+  check("an invented claim token is rejected", bogusRejected);
+
+  // 6. Claiming by sign-up attaches unclaimed orders with the same email.
+  const orphan = await createOrder(db, {
+    channel: "pickup",
+    customerName: "Orphan Order",
+    email: "orphan@example.com",
+    paymentMethod: "counter",
+    items: [{ itemId: items[0].id, variantId: items[0].variants[0].id, qty: 1 }],
+  });
+  const orphanCustomer = await upsertGuestCustomer(db, {
+    name: "Orphan Order",
+    email: "orphan@example.com",
+  });
+  await db.query("UPDATE orders SET customer_id = NULL WHERE id = $1", [orphan.order.id]);
+  const claimedCount = await claimOrdersForEmail(db, orphanCustomer!);
+  check(
+    "claimOrdersForEmail sweeps up unlinked orders",
+    claimedCount >= 1 &&
+      (await getOrderById(db, orphan.order.id))?.customer_id === orphanCustomer!.id,
+  );
+  check(
+    "the claim is recorded in the customer's activity log",
+    (await count(db, "customer_activity")) > 0,
+  );
+  check(
+    "seeded demo customers exist with password hashes",
+    Boolean((await getCustomerByEmail(db, "ayesha@example.com"))?.password_hash),
   );
 
   section("Order lifecycle — table QR order");

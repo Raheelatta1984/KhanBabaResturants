@@ -83,27 +83,40 @@ function expiryValid(value: string): boolean {
   return end > Date.now();
 }
 
+type Prefill = {
+  name?: string | null;
+  email?: string | null;
+  phone?: string | null;
+  address?: string | null;
+  suburb?: string | null;
+  postcode?: string | null;
+  signedIn?: boolean;
+};
+
 export function CheckoutFlow({
   paymentMode,
   payAtCounterEnabled,
   showDeliveryBreakdown,
   gstPercent,
+  prefill,
 }: {
   paymentMode: "simulated" | "stripe";
   payAtCounterEnabled: boolean;
   showDeliveryBreakdown: boolean;
   gstPercent: number;
+  /** Saved account details — checkout should feel like a confirmation, not a form. */
+  prefill?: Prefill;
 }) {
   const router = useRouter();
   const { items, subtotalCents, setQty, remove, clear, hydrated } = useCart();
 
   const [channel, setChannel] = useState<Channel>("delivery");
-  const [name, setName] = useState("");
-  const [phone, setPhone] = useState("");
-  const [email, setEmail] = useState("");
-  const [address, setAddress] = useState("");
-  const [suburb, setSuburb] = useState("");
-  const [postcode, setPostcode] = useState("");
+  const [name, setName] = useState(prefill?.name ?? "");
+  const [phone, setPhone] = useState(prefill?.phone ?? "");
+  const [email, setEmail] = useState(prefill?.email ?? "");
+  const [address, setAddress] = useState(prefill?.address ?? "");
+  const [suburb, setSuburb] = useState(prefill?.suburb ?? "");
+  const [postcode, setPostcode] = useState(prefill?.postcode ?? "");
   const [notes, setNotes] = useState("");
   const [priority, setPriority] = useState(false);
   const [paymentMethod, setPaymentMethod] = useState<"online" | "counter">("online");
@@ -376,6 +389,15 @@ export function CheckoutFlow({
             <h3>
               <span className="step-number">2</span>Your details
             </h3>
+            {prefill?.signedIn ? (
+              <span className="badge badge-green">
+                <Icon name="check" size={11} /> From your account
+              </span>
+            ) : (
+              <Link href="/login?reason=signin" className="tiny" style={{ color: "var(--accent)" }}>
+                Sign in to fill this in
+              </Link>
+            )}
           </div>
           <div className="form-grid">
             <div className="field">

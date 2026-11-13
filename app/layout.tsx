@@ -5,6 +5,7 @@ import "./globals.css";
 import { CartProvider } from "@/components/CartProvider";
 import { SiteChrome } from "@/components/SiteChrome";
 import { BRAND_SETTINGS } from "@/lib/settings";
+import { getCustomerSession } from "@/lib/auth/customer";
 
 export const metadata: Metadata = {
   title: {
@@ -30,11 +31,13 @@ export const viewport: Viewport = {
   initialScale: 1,
 };
 
-export default function RootLayout({
+export default async function RootLayout({
   children,
 }: {
   children: React.ReactNode;
 }) {
+  // Cookie-only: the header can greet a returning customer without a query.
+  const customer = await getCustomerSession();
   // Intentionally database-free: the chrome must render even when the database
   // is unreachable, so the error pages inside it can explain what to fix.
   const settings = BRAND_SETTINGS;
@@ -53,7 +56,9 @@ export default function RootLayout({
           Skip to content
         </a>
         <CartProvider>
-          <SiteChrome restaurant={restaurant}>{children}</SiteChrome>
+          <SiteChrome restaurant={restaurant} customer={customer}>
+            {children}
+          </SiteChrome>
         </CartProvider>
       </body>
     </html>

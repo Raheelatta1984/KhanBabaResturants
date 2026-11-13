@@ -10,6 +10,7 @@ const GROUPS: { title: string; links: { href: string; label: string }[] }[] = [
       { href: "/admin", label: "Overview" },
       { href: "/admin/orders", label: "Orders" },
       { href: "/counter", label: "Counter portal" },
+      { href: "/counter/customers", label: "Customers" },
       { href: "/kitchen", label: "Kitchen portal" },
       { href: "/delivery", label: "Delivery portal" },
     ],

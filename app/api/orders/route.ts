@@ -1,6 +1,8 @@
 import { NextResponse } from "next/server";
 import { getDb } from "@/lib/db";
 import { createOrder, OrderError, type CartLineInput } from "@/lib/orders";
+import { getCustomerSession } from "@/lib/auth/customer";
+import { publicBaseUrl } from "@/lib/url";
 import type { Channel } from "@/lib/pricing";
 
 export const dynamic = "force-dynamic";
@@ -43,6 +45,9 @@ export async function POST(request: Request) {
   }
 
   const db = await getDb();
+  // The account comes from the signed cookie — never from the request body, or
+  // anyone could place orders against someone else's history.
+  const session = await getCustomerSession();
   try {
     const result = await createOrder(db, {
       channel: body.channel ?? "delivery",
@@ -58,6 +63,7 @@ export async function POST(request: Request) {
       paymentMethod: body.paymentMethod ?? "online",
       paymentLast4: body.paymentLast4,
       quoteToken: body.quoteToken,
+      customerId: session?.id ?? null,
       items: body.items.map((item) => ({
         itemId: Number(item.itemId),
         variantId: Number(item.variantId),
@@ -67,13 +73,19 @@ export async function POST(request: Request) {
       })),
     });
 
+    const trackingPath = result.trackingToken
+      ? `/t/${result.trackingToken}`
+      : `/order/${result.order.code}`;
     return NextResponse.json(
       {
         code: result.order.code,
         totalCents: result.order.total_cents,
         paymentStatus: result.order.payment_status,
+        trackingToken: result.trackingToken,
+        trackingPath,
+        trackingUrl: `${publicBaseUrl(request)}${trackingPath}`,
         redirectUrl: result.redirectUrl ?? null,
-        redirectTo: result.redirectUrl ?? `/order/${result.order.code}?new=1`,
+        redirectTo: result.redirectUrl ?? `${trackingPath}?new=1`,
       },
       { status: 201 },
     );

@@ -5,6 +5,7 @@ import { getSettings } from "@/lib/settings";
 import { stripeConfigured } from "@/lib/payments";
 import { getDb } from "@/lib/db";
 import { computePricing } from "@/lib/pricing";
+import { getCurrentCustomer } from "@/lib/auth/customer";
 
 export const dynamic = "force-dynamic";
 
@@ -17,6 +18,7 @@ export const metadata: Metadata = {
 export default async function CheckoutPage() {
   const settings = await getSettings();
   const db = await getDb();
+  const account = await getCurrentCustomer(db);
   const preview = await computePricing(db, {
     subtotalCents: 0,
     channel: "delivery",
@@ -88,6 +90,19 @@ export default async function CheckoutPage() {
         </div>
 
         <CheckoutFlow
+          prefill={
+            account
+              ? {
+                  name: account.name,
+                  email: account.email,
+                  phone: account.phone,
+                  address: account.address,
+                  suburb: account.suburb,
+                  postcode: account.postcode,
+                  signedIn: true,
+                }
+              : undefined
+          }
           paymentMode={paymentMode}
           payAtCounterEnabled={settings.pay_at_counter_enabled === "1"}
           showDeliveryBreakdown={settings.show_delivery_breakdown === "1"}

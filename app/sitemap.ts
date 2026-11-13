@@ -12,6 +12,8 @@ export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
   return [
     { url: base, lastModified: new Date(), priority: 1 },
     { url: `${base}/menu`, lastModified: new Date(), priority: 0.9 },
+    { url: `${base}/track`, lastModified: new Date(), priority: 0.7 },
+    { url: `${base}/login`, lastModified: new Date(), priority: 0.5 },
     { url: `${base}/whats-new`, lastModified: new Date(), priority: 0.6 },
     ...items.map((item) => ({
       url: `${base}/menu/${item.slug}`,
