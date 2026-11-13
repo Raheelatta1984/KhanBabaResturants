@@ -276,6 +276,23 @@ curl -s https://your-domain/api/health | jq
 Postgres (`menuItems`, `orders`, `staff`, `materials`…), which driver is storing photos, and `503` with the connection
 error when `DATABASE_URL` is missing or the branch is asleep/unreachable.
 
+### Troubleshooting: "Application error: a server-side exception has occurred"
+
+That screen (with a digest number) is what Next.js shows when a server component throws and no error boundary catches
+it. The most common cause by far is a deployment with **no `DATABASE_URL`** — the project builds fine, but every page
+that reads the menu fails on its first query.
+
+1. Open `/api/health`. `{"ok": false, "storage": "unconfigured"}` means the variable is missing; a message about the
+   connection means it is set but the database is unreachable.
+2. Confirm the variable exists for **both** Production and Preview: `vercel env ls` or Settings → Environment
+   Variables. Vercel only injects variables set _before_ a build, so adding one requires a redeploy.
+3. Paste the **pooled** Neon string (`…-pooler…`) and check the branch is not suspended.
+
+Since this release the failure is no longer opaque: the root layout no longer touches the database (it renders the
+restaurant name/address from `lib/settings.ts` defaults), and both `app/error.tsx` and `app/global-error.tsx` recognise
+a database configuration error and print these steps instead of the digest page. `/api/health` stays the single source
+of truth for diagnosis.
+
 ### 6. Local testing against the real engine
 
 ```bash
