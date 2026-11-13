@@ -1009,6 +1009,14 @@ function seedWhatsNew(db: Database.Database) {
       "-1 hours",
     ],
     [
+      "Runs anywhere, including Vercel previews",
+      "Cloud previews now start with a working database and a health check.",
+      "The schema ships inside the server bundle instead of being read from disk, and when a host has no persistent volume the database is created in temporary storage and seeded automatically. Admin shows a preview-storage notice in that mode, and /api/health reports whether storage is persistent.",
+      "ops",
+      1,
+      "0 minutes",
+    ],
+    [
       "This release feed",
       "What's New is built into the site.",
       "Every pull request can add a note here. The feed is published from the admin console, and the scripts/whats-new.mjs helper drafts entries straight from your git history.",

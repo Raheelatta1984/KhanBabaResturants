@@ -18,6 +18,10 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci
+      - name: Generated schema is in sync
+        run: |
+          npm run schema:build
+          git diff --exit-code lib/db/schema.ts
       - name: Typecheck
         run: npm run typecheck
       - name: Seed database
