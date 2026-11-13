@@ -4,6 +4,7 @@ import { notFound } from "next/navigation";
 import { getDb } from "@/lib/db";
 import { publicOrderPayload } from "@/lib/orders";
 import { TrackingView } from "@/components/TrackingView";
+import { TrackingLinkBar } from "@/components/TrackingLinkBar";
 import { Icon } from "@/components/Icon";
 
 export const dynamic = "force-dynamic";
@@ -51,6 +52,10 @@ export default async function OrderTrackingPage({
         </nav>
 
         <TrackingView initial={payload} justPlaced={justPlaced} />
+
+        {payload.trackingToken ? (
+          <TrackingLinkBar token={payload.trackingToken} orderCode={payload.order.code} />
+        ) : null}
 
         <div className="notice" style={{ marginTop: 24 }}>
           <Icon name="shield" size={15} />

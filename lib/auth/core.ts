@@ -1,3 +1,5 @@
+import { signToken, verifyToken } from "./token";
+
 export type Role = "admin" | "manager" | "counter" | "kitchen" | "delivery";
 
 export const ROLE_LABELS: Record<Role, string> = {
@@ -18,43 +20,8 @@ export type StaffSession = {
 
 export const SESSION_COOKIE = "kb_staff";
 const SESSION_TTL_SECONDS = 60 * 60 * 12;
-
-function secret(): string {
-  return process.env.SESSION_SECRET || "khan-baba-dev-secret-change-me";
-}
-
-function toBase64Url(bytes: Uint8Array): string {
-  let str = "";
-  for (const b of bytes) str += String.fromCharCode(b);
-  return btoa(str).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
-}
-
-function fromBase64Url(value: string): Uint8Array {
-  const padded = value.replace(/-/g, "+").replace(/_/g, "/") + "===".slice((value.length + 3) % 4);
-  const raw = atob(padded);
-  const out = new Uint8Array(raw.length);
-  for (let i = 0; i < raw.length; i++) out[i] = raw.charCodeAt(i);
-  return out;
-}
-
-async function hmac(data: string): Promise<Uint8Array> {
-  const key = await crypto.subtle.importKey(
-    "raw",
-    new TextEncoder().encode(secret()),
-    { name: "HMAC", hash: "SHA-256" },
-    false,
-    ["sign"],
-  );
-  const sig = await crypto.subtle.sign("HMAC", key, new TextEncoder().encode(data));
-  return new Uint8Array(sig);
-}
-
-function safeEqual(a: string, b: string): boolean {
-  if (a.length !== b.length) return false;
-  let out = 0;
-  for (let i = 0; i < a.length; i++) out |= a.charCodeAt(i) ^ b.charCodeAt(i);
-  return out === 0;
-}
+/** Audience claim — a customer cookie is signed with the same secret but a different aud. */
+const AUDIENCE = "staff";
 
 export async function createSessionToken(staff: {
   id: number;
@@ -62,31 +29,15 @@ export async function createSessionToken(staff: {
   email: string;
   role: Role;
 }): Promise<string> {
-  const payload: StaffSession = {
-    id: staff.id,
-    name: staff.name,
-    email: staff.email,
-    role: staff.role,
-    exp: Math.floor(Date.now() / 1000) + SESSION_TTL_SECONDS,
-  };
-  const body = toBase64Url(new TextEncoder().encode(JSON.stringify(payload)));
-  const signature = toBase64Url(await hmac(body));
-  return `${body}.${signature}`;
+  return signToken({ ...staff, aud: AUDIENCE }, SESSION_TTL_SECONDS);
 }
 
-export async function verifySessionToken(token: string | undefined | null): Promise<StaffSession | null> {
-  if (!token || !token.includes(".")) return null;
-  const [body, signature] = token.split(".");
-  if (!body || !signature) return null;
-  const expected = toBase64Url(await hmac(body));
-  if (!safeEqual(signature, expected)) return null;
-  try {
-    const payload = JSON.parse(new TextDecoder().decode(fromBase64Url(body))) as StaffSession;
-    if (!payload.exp || payload.exp < Math.floor(Date.now() / 1000)) return null;
-    return payload;
-  } catch {
-    return null;
-  }
+export async function verifySessionToken(
+  token: string | undefined | null,
+): Promise<StaffSession | null> {
+  const payload = await verifyToken<StaffSession & { aud?: string }>(token);
+  if (!payload || payload.aud !== AUDIENCE) return null;
+  return payload;
 }
 
 const ACCESS: Record<string, Role[]> = {

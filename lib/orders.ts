@@ -7,6 +7,7 @@ import {
   type DeliveryPricing,
 } from "./pricing";
 import { startCardPayment } from "./payments";
+import { upsertGuestCustomer } from "./auth/customer";
 import { getSetting, getSettingNumber } from "./settings";
 import { addressHash, verifyQuote } from "./quotes";
 import {
@@ -66,12 +67,16 @@ export type CreateOrderInput = {
   paymentMethod: "online" | "counter";
   paymentLast4?: string;
   quoteToken?: string;
+  /** Set by the ordering route from the signed-in customer cookie, never by the browser. */
+  customerId?: number | null;
   items: CartLineInput[];
 };
 
 export type OrderRow = {
   id: number;
   code: string;
+  customer_id: number | null;
+  tracking_token: string | null;
   channel: Channel;
   table_id: number | null;
   customer_name: string;
@@ -146,6 +151,16 @@ export function newOrderCode(): string {
   return `KB-${stamp}${randomBytes(2).toString("hex").toUpperCase()}`;
 }
 
+/**
+ * The token behind `GET /t/<token>` — the link a customer can text to whoever is
+ * collecting, or reopen on another phone without typing an order code. 16 bytes
+ * of randomness makes it unguessable; the order code stays the human-facing
+ * handle.
+ */
+export function newTrackingToken(): string {
+  return randomBytes(16).toString("base64url");
+}
+
 export async function addEvent(
   db: Db,
   orderId: number,
@@ -174,6 +189,53 @@ export async function getOrderById(
   id: number,
 ): Promise<OrderRow | null> {
   return db.maybeOne<OrderRow>("SELECT * FROM orders WHERE id = $1", [id]);
+}
+
+export async function getOrderByTrackingToken(
+  db: Db,
+  token: string,
+): Promise<OrderRow | null> {
+  const clean = (token ?? "").trim();
+  if (!clean) return null;
+  return db.maybeOne<OrderRow>(
+    "SELECT * FROM orders WHERE tracking_token = $1",
+    [clean],
+  );
+}
+
+/** Every order belonging to an account, newest first, with its items. */
+export async function listCustomerOrders(
+  db: Db,
+  customerId: number,
+  limit = 50,
+) {
+  const orders = await db.query<OrderRow>(
+    `SELECT * FROM orders WHERE customer_id = $1 ORDER BY created_at DESC, id DESC LIMIT $2`,
+    [customerId, limit],
+  );
+  const withItems = [];
+  for (const order of orders) {
+    withItems.push({
+      order,
+      items: await getOrderItems(db, order.id),
+    });
+  }
+  return withItems;
+}
+
+/**
+ * Resolve an order from whatever the customer has: the code they were given,
+ * or the token in their tracking link. Used by the shared tracking view so one
+ * URL shape (`/t/<token>`) and one search box both work.
+ */
+export async function resolveOrderRef(
+  db: Db,
+  ref: string,
+): Promise<OrderRow | null> {
+  const clean = (ref ?? "").trim();
+  if (!clean) return null;
+  if (/^KB-/i.test(clean)) return getOrderByCode(db, clean);
+  return (await getOrderByTrackingToken(db, clean)) ?? getOrderByCode(db, clean);
 }
 
 export async function getOrderItems(
@@ -218,6 +280,11 @@ export async function getLatestJob(
 export async function getFullOrder(db: Db, code: string) {
   const order = await getOrderByCode(db, code);
   if (!order) return null;
+  return fullOrderFromRow(db, order);
+}
+
+/** The same shape as getFullOrder, for a row already in hand. */
+export async function fullOrderFromRow(db: Db, order: OrderRow) {
   const table = order.table_id
     ? await db.maybeOne<{ code: string; name: string; zone: string | null }>(
         "SELECT code, name, zone FROM dining_tables WHERE id = $1",
@@ -324,6 +391,8 @@ export type CreateOrderResult = {
   items: OrderItemRow[];
   pricing: PricingBreakdown;
   redirectUrl?: string;
+  /** The unguessable token behind the shareable /t/<token> tracking link. */
+  trackingToken: string | null;
 };
 
 export async function createOrder(
@@ -427,6 +496,25 @@ export async function createOrder(
   }
 
   const code = newOrderCode();
+  const trackingToken = newTrackingToken();
+
+  // Attach the order to an account when we can identify one: the signed-in
+  // customer first, otherwise the guest row for this email (created on the
+  // spot). Counter walk-ins without an email simply have no account — the
+  // tracking token still gives them a live link.
+  let customerId: number | null = input.customerId ?? null;
+  if (!customerId && input.email) {
+    const guest = await upsertGuestCustomer(db, {
+      name,
+      email: input.email,
+      phone: input.phone,
+      address: input.address,
+      suburb: input.suburb,
+      postcode: input.postcode,
+    });
+    customerId = guest?.id ?? null;
+  }
+
   const prepMinutes = Math.max(...lines.map((l) => l.prep_minutes));
   const promisedAt = new Date(
     Date.now() + (prepMinutes + (channel === "delivery" ? 25 : 5)) * 60_000,
@@ -434,14 +522,17 @@ export async function createOrder(
 
   const orderId = await db.transaction(async (tx) => {
     const id = await tx.insert(
-      `INSERT INTO orders (code, channel, table_id, customer_name, phone, email, address, suburb, postcode, notes,
+      `INSERT INTO orders (code, customer_id, tracking_token, channel, table_id, customer_name, phone, email,
+        address, suburb, postcode, notes,
         subtotal_cents, surcharge_cents, surcharge_detail, priority, priority_fee_cents, delivery_fee_cents,
         delivery_cost_cents, total_cents, payment_method, payment_status, status, progress, promised_at)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20,
-        'pending_confirm', 5, $21)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22,
+        'pending_confirm', 5, $23)
        RETURNING id`,
       [
         code,
+        customerId,
+        trackingToken,
         channel,
         tableId,
         name,
@@ -496,6 +587,16 @@ export async function createOrder(
     );
     return id;
   });
+
+  if (customerId) {
+    await db.query(
+      `INSERT INTO customer_activity (customer_id, kind, detail) VALUES ($1, 'order', $2)`,
+      [customerId, `Placed order ${code}`],
+    );
+    await db.query("UPDATE customers SET last_order_at = now() WHERE id = $1", [
+      customerId,
+    ]);
+  }
 
   // Delivery job placeholder — the coordinator confirms the live quote at dispatch time.
   if (channel === "delivery" && delivery) {
@@ -576,6 +677,7 @@ export async function createOrder(
     items: await getOrderItems(db, orderId),
     pricing,
     redirectUrl,
+    trackingToken: order.tracking_token,
   };
 }
 
@@ -1144,5 +1246,7 @@ export async function publicOrderPayload(db: Db, code: string) {
         }
       : null,
     table: table ? { code: table.code, name: table.name } : null,
+    /** Present once the order row has one; the shareable link is derived from it. */
+    trackingToken: order.tracking_token,
   };
 }

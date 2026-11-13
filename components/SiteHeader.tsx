@@ -5,19 +5,22 @@ import { usePathname } from "next/navigation";
 import { useState } from "react";
 import { useCart } from "./CartProvider";
 import { Icon } from "./Icon";
+import type { CustomerSession } from "@/lib/auth/customer";
 
 const LINKS = [
   { href: "/menu", label: "Menu" },
+  { href: "/track", label: "Track order" },
   { href: "/whats-new", label: "What's new" },
   { href: "/#story", label: "Our story" },
   { href: "/#visit", label: "Find us" },
   { href: "/table/T04", label: "Table ordering" },
 ];
 
-export function SiteHeader() {
+export function SiteHeader({ customer }: { customer?: CustomerSession | null }) {
   const pathname = usePathname();
   const { count, hydrated } = useCart();
   const [open, setOpen] = useState(false);
+  const firstName = customer?.name?.split(" ")[0];
 
   return (
     <header className="site-header">
@@ -43,6 +46,17 @@ export function SiteHeader() {
         </nav>
 
         <div className="header-actions">
+          {customer ? (
+            <Link href="/account" className="account-pill" title="My account">
+              <Icon name="user" size={15} />
+              <span>{firstName}</span>
+            </Link>
+          ) : (
+            <Link href="/login?reason=signin" className="account-pill" title="Sign in">
+              <Icon name="user" size={15} />
+              <span>Sign in</span>
+            </Link>
+          )}
           <Link href="/checkout" className="cart-pill" aria-label="View cart">
             <Icon name="cart" size={16} />
             <span className="label">Cart</span>
@@ -76,6 +90,13 @@ export function SiteHeader() {
                 {link.label}
               </Link>
             ))}
+            <Link
+              href={customer ? "/account" : "/login?reason=signin"}
+              onClick={() => setOpen(false)}
+              style={{ padding: "10px 4px", color: "var(--muted)", borderBottom: "1px solid var(--line)" }}
+            >
+              {customer ? `My account (${firstName})` : "Sign in / create account"}
+            </Link>
             <Link href="/staff/login" onClick={() => setOpen(false)} style={{ padding: "10px 4px", color: "var(--muted-2)", fontSize: "0.82rem" }}>
               Staff sign in
             </Link>

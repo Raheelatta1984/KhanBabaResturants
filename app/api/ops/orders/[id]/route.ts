@@ -14,6 +14,8 @@ import {
   setItemPrepState,
   syncDelivery,
 } from "@/lib/orders";
+import { createClaimToken } from "@/lib/auth/customer";
+import { publicBaseUrl } from "@/lib/url";
 
 export const dynamic = "force-dynamic";
 
@@ -119,6 +121,26 @@ export async function POST(
           body.reason || "Cancelled by staff",
         );
         return NextResponse.json({ ok: true, order });
+      }
+      case "claim-link": {
+        // A one-time link the counter can text so a guest can attach this order
+        // to an account (and see it later without the code).
+        const order = await db.one<{
+          id: number;
+          code: string;
+          email: string | null;
+        }>("SELECT id, code, email FROM orders WHERE id = $1", [orderId]);
+        if (!order.email)
+          throw new OrderError(
+            "This order has no email on it, so there is nothing to verify against",
+          );
+        const token = await createClaimToken(db, order);
+        if (!token) throw new OrderError("Could not create a claim link");
+        return NextResponse.json({
+          ok: true,
+          claimUrl: `${publicBaseUrl(request)}/claim/${token}`,
+          email: order.email,
+        });
       }
       case "quote": {
         const job = await refreshDeliveryQuote(db, orderId, session.name);

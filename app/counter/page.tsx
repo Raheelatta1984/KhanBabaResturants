@@ -13,6 +13,7 @@ import { money } from "@/lib/money";
 import { PortalNav } from "@/components/portal/PortalNav";
 import { AutoRefresh } from "@/components/portal/AutoRefresh";
 import { ConfirmOrderButton } from "@/components/portal/ConfirmOrderButton";
+import { ClaimLinkButton } from "@/components/portal/ClaimLinkButton";
 import { OpsButton } from "@/components/portal/OpsButton";
 import { Icon } from "@/components/Icon";
 import { StatusBadge } from "@/components/ui";
@@ -52,6 +53,9 @@ export default async function CounterPage() {
           <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
             <Link href="/kitchen" className="btn btn-outline btn-sm">
               Kitchen display <Icon name="arrow" size={14} />
+            </Link>
+            <Link href="/counter/customers" className="btn btn-ghost btn-sm">
+              <Icon name="user" size={14} /> Customers
             </Link>
             <Link href="/delivery" className="btn btn-ghost btn-sm">
               Delivery desk
@@ -210,6 +214,10 @@ export default async function CounterPage() {
                         <ConfirmOrderButton
                           orderId={order.id}
                           code={order.code}
+                        />
+                        <ClaimLinkButton
+                          orderId={order.id}
+                          hasEmail={Boolean(order.email)}
                         />
                         {order.payment_status !== "paid" ? (
                           <>
