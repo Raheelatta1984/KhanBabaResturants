@@ -129,6 +129,34 @@ import {
   publicOffers,
 } from "../lib/community";
 import { squareStatus, syncSquare } from "../lib/integrations/square";
+import {
+  approveMusicRequest,
+  clearEncouragement,
+  getNowPlaying,
+  pauseMusic,
+  playCollection,
+  resumeMusic,
+  scheduledCollection,
+  setMusicVolume,
+  submitMusicRequest,
+  triggerTableEncouragement,
+} from "../lib/music";
+import {
+  catalogItem,
+  consumeStockForOrder,
+  publishMenuItem,
+  setItemStock,
+} from "../lib/whatsapp/catalog";
+import {
+  handleInboundWhatsApp,
+  parseOrderText,
+  requestOrderPayment,
+} from "../lib/whatsapp/orders";
+import { parkOrder, settleTableOrder } from "../lib/dine-in";
+import {
+  feedbackInviteByToken,
+  submitFeedback,
+} from "../lib/feedback";
 
 let passed = 0;
 const failures: string[] = [];
@@ -714,9 +742,11 @@ async function main() {
     ],
   });
   check("table order links the table", tableOrder.order.table_id !== null);
+  // House rule: a guest at a table never pays online — the ticket is settled at
+  // the counter after the meal.
   check(
-    "online payment captured by the sandbox gateway",
-    tableOrder.order.payment_status === "paid",
+    "a table order is forced to pay at the counter",
+    tableOrder.order.payment_method === "counter" && tableOrder.order.payment_status === "unpaid",
   );
   const tablePayload = await publicOrderPayload(db, tableOrder.order.code);
   check(
@@ -821,12 +851,13 @@ async function main() {
   const dineIn = await createOrder(db, {
     channel: "dine_in",
     customerName: "Walk-in — 2 guests",
-    paymentMethod: "online",
+    paymentMethod: "counter",
     items: [
       { itemId: items[2].id, variantId: items[2].variants[0].id, qty: 1 },
     ],
   });
   check("dine-in created", dineIn.order.channel === "dine_in");
+  await markOrderPaid(db, dineIn.order.id, "Rina Patel", "cash");
   const cancelled = await cancelOrder(
     db,
     dineIn.order.id,
@@ -1050,8 +1081,16 @@ async function main() {
   );
   check(
     "demo orders KB-DEMO01..07 present",
-    demoOrders.length === 7 &&
-      demoOrders.some((row) => row.code === "KB-DEMO07"),
+    ["KB-DEMO01", "KB-DEMO02", "KB-DEMO03", "KB-DEMO04", "KB-DEMO05", "KB-DEMO06", "KB-DEMO07"].every(
+      (code) => demoOrders.some((row) => row.code === code),
+    ),
+    demoOrders.map((row) => row.code),
+  );
+  check(
+    "the v3 demo orders are seeded too",
+    ["KB-DEMO08", "KB-DEMO09", "KB-DEMO10"].every((code) =>
+      demoOrders.some((row) => row.code === code),
+    ),
     demoOrders.map((row) => row.code),
   );
 
@@ -1709,6 +1748,250 @@ async function main() {
       "go-live is safe to run twice",
       again.disabledStaff === 0 && again.removedCustomers === 0 && again.passwordHash === null,
     );
+
+    // ---------------------------------------------------- v3 modules
+    section("Lahore music system");
+
+    const musicTracks = await count(db, "music_tracks");
+    check("the library is seeded with music and religious tracks", musicTracks >= 7, musicTracks);
+    check(
+      "religious tracks are a separate kind",
+      (
+        await db.one<{ c: number }>(
+          "SELECT COUNT(*) AS c FROM music_tracks WHERE kind = 'religious'",
+        )
+      ).c > 0,
+    );
+
+    const evening = await db.one<{ id: number }>(
+      "SELECT id FROM music_collections WHERE slug = 'lahore-evening'",
+    );
+    const naatCollection = await db.one<{ id: number }>(
+      "SELECT id FROM music_collections WHERE slug = 'friday-naat'",
+    );
+
+    await playCollection(db, "Counter Tester", { collectionId: evening.id });
+    const playingNow = await getNowPlaying(db);
+    check("the shared player reports what is playing", playingNow.status === "playing");
+    check("the default volume stays low", playingNow.volume <= 60, playingNow.volume);
+    check(
+      "the counter can pause the room",
+      (await pauseMusic(db, "Counter Tester")).status === "paused",
+    );
+    check(
+      "and resume it",
+      (await resumeMusic(db, "Counter Tester")).status === "playing",
+    );
+    check(
+      "volume cannot be wound past a comfortable level",
+      (await setMusicVolume(db, "Counter Tester", 95)).volume === 60,
+    );
+
+    const fridayEvening = await scheduledCollection(
+      db,
+      new Date("2026-11-13T07:00:00Z"), // Friday 18:00 in Sydney (AEDT)
+    );
+    check(
+      "a Friday evening schedule picks the religious collection",
+      fridayEvening?.collection.kind === "religious",
+      fridayEvening?.collection.name,
+    );
+
+    await playCollection(db, "Counter Tester", { collectionId: naatCollection.id });
+    await triggerTableEncouragement(db, tableOrder.order.id, "test");
+    const religiousNow = await getNowPlaying(db);
+    check(
+      "the table-order music stays silent during a religious set",
+      religiousNow.isReligious && !religiousNow.encouragement?.active,
+    );
+    await clearEncouragement(db);
+
+    let badRequestRejected = false;
+    try {
+      await submitMusicRequest(db, {
+        customerName: "Guest Tester",
+        title: "No link",
+        url: "not-a-url",
+      });
+    } catch {
+      badRequestRejected = true;
+    }
+    check("a song request needs a real URL", badRequestRejected);
+
+    const songRequest = await submitMusicRequest(db, {
+      customerName: "Guest Tester",
+      title: "Test Qawwali",
+      url: "https://example.com/test-qawwali.mp3",
+      tableCode: "T04",
+      orderId: tableOrder.order.id,
+    });
+    check("a request waits for staff approval", songRequest.status === "pending");
+    const approved = await approveMusicRequest(db, "Counter Tester", songRequest.id, {
+      chargeCents: 750,
+      playNow: false,
+    });
+    check("approval turns the request into a playable track", approved.trackId > 0);
+    const chargedBill = await getOrderById(db, tableOrder.order.id);
+    check(
+      "the on-demand charge is posted to the bill",
+      chargedBill?.music_charge_cents === 750,
+      chargedBill?.music_charge_cents,
+    );
+
+    const secondRequest = await submitMusicRequest(db, {
+      customerName: "Guest Tester",
+      title: "A gift",
+      url: "https://example.com/gift.mp3",
+    });
+    const waived = await approveMusicRequest(db, "Counter Tester", secondRequest.id, {
+      chargeCents: 0,
+      playNow: false,
+    });
+    check("staff can waive the charge entirely", waived.request.charge_cents === 0);
+
+    section("WhatsApp Business commerce");
+
+    const parsed = await parseOrderText(db, "2 chicken biryani and 1 garlic naan");
+    check(
+      "a WhatsApp message is matched against the live menu",
+      parsed.length >= 2 && parsed.some((line) => line.qty === 2),
+      parsed,
+    );
+    const inbound = await handleInboundWhatsApp(
+      db,
+      { from: "61400000111", name: "Wa Guest", text: "1 butter chicken table 4" },
+      "http://localhost:3000",
+    );
+    check("an inbound WhatsApp message becomes an order", Boolean(inbound.orderCode), inbound);
+    const waOrder = inbound.orderCode ? await getOrderByCode(db, inbound.orderCode) : null;
+    check(
+      "the order is sourced to WhatsApp and unpaid",
+      waOrder?.source === "whatsapp" && waOrder?.payment_status === "unpaid",
+    );
+    check(
+      "the counter is notified on WhatsApp (sandbox logged)",
+      (await count(db, "whatsapp_messages")) > 0,
+    );
+    const payLink = await requestOrderPayment(
+      db,
+      waOrder!.id,
+      "Counter Tester",
+      "http://localhost:3000",
+    );
+    check(
+      "a secure payment link is minted for the guest",
+      Boolean(payLink.token && payLink.url?.includes("/pay/")),
+      payLink.url,
+    );
+    check(
+      "the payment link is stored on the order",
+      (await getOrderById(db, waOrder!.id))?.payment_link_token === payLink.token,
+    );
+
+    const published = await publishMenuItem(db, items[0].id, "Manager Tester");
+    check(
+      "a dish publishes to the WhatsApp catalogue (sandbox)",
+      published.status === "published" && published.sandbox,
+      published,
+    );
+    const tracked = await setItemStock(db, items[0].id, "Manager Tester", {
+      stockQty: 2,
+      trackStock: true,
+      lowStockLevel: 1,
+    });
+    check("central stock is recorded", tracked.stock_qty === 2 && tracked.track_stock);
+
+    const stockOrder = await createOrder(db, {
+      channel: "pickup",
+      customerName: "Stock Tester",
+      paymentMethod: "counter",
+      items: [{ itemId: items[0].id, variantId: items[0].variants[0].id, qty: 1 }],
+    });
+    await confirmOrder(db, stockOrder.order.id, "Counter Tester");
+    const afterStock = await catalogItem(db, items[0].id);
+    check(
+      "accepting an order takes stock off the shelf",
+      afterStock?.stock_qty === 1,
+      afterStock?.stock_qty,
+    );
+    await consumeStockForOrder(db, stockOrder.order.id, "Counter Tester");
+    check(
+      "consuming the same order twice does not double-count",
+      (await catalogItem(db, items[0].id))?.stock_qty === 1,
+    );
+    await setItemStock(db, items[0].id, "Manager Tester", {
+      stockQty: 0,
+      trackStock: true,
+    });
+    check(
+      "zero stock makes the dish unavailable everywhere",
+      (await catalogItem(db, items[0].id))?.is_available === false,
+    );
+    await setItemStock(db, items[0].id, "Manager Tester", {
+      stockQty: 20,
+      available: true,
+      trackStock: true,
+    });
+
+    section("Dine-in settlement, parking and feedback");
+
+    const parked = await parkOrder(
+      db,
+      tableOrder.order.id,
+      "Counter Tester",
+      "Guest is still eating",
+    );
+    check("a table bill can be parked at the counter", parked.parked === true);
+    const settled = await settleTableOrder(
+      db,
+      tableOrder.order.id,
+      "Counter Tester",
+      "cash",
+      "http://localhost:3000",
+    );
+    check(
+      "settling takes the payment, releases the park and completes the table",
+      settled.order.payment_status === "paid" &&
+        settled.order.status === "completed" &&
+        settled.order.parked === false,
+    );
+    check(
+      "a feedback link is prepared on settlement",
+      Boolean(settled.feedbackUrl),
+      settled.feedbackUrl,
+    );
+
+    const feedbackToken = settled.feedbackUrl?.split("/feedback/")[1] ?? "";
+    const inviteView = await feedbackInviteByToken(db, feedbackToken);
+    check(
+      "the feedback link resolves the real order",
+      inviteView?.order.code === tableOrder.order.code,
+    );
+    const submitted = await submitFeedback(db, feedbackToken, {
+      rating: 5,
+      comment: "The biryani was the proper Lahori thing.",
+      highlights: ["Chicken Biryani"],
+      partySize: 3,
+    });
+    const draft = await db.one<{
+      body: string;
+      party_size: number;
+      bill_cents: number;
+      status: string;
+    }>("SELECT body, party_size, bill_cents, status FROM google_review_drafts WHERE id = $1", [
+      submitted.draftId,
+    ]);
+    check(
+      "the Google review draft states the party size",
+      draft.party_size === 3 && draft.body.includes("3 people"),
+      draft.body,
+    );
+    check(
+      "the draft names the dishes and the bill range",
+      draft.body.includes("Chicken Biryani") && /\$[0-9]+\.[0-9]{2}–\$[0-9]+\.[0-9]{2}/.test(draft.body),
+      draft.body,
+    );
+    check("the draft waits for the team", draft.status === "draft");
 
     // ------------------------------------------------- upgrading an old database
     section("Upgrading a database created by an earlier release");

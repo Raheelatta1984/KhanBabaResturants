@@ -101,6 +101,75 @@ export const DEFAULT_SETTINGS: Record<string, string> = {
   // Media
   media_driver: "auto", // auto | blob | gdrive | local
   gdrive_folder_id: "",
+
+  // ---------------------------------------------------------------------------
+  // WhatsApp Business commerce
+  // ---------------------------------------------------------------------------
+  // Publish the menu to the WhatsApp catalogue and take orders in the chat.
+  // With no credentials the whole channel runs in a clearly-labelled sandbox
+  // that logs every message to whatsapp_messages instead of calling Meta.
+  whatsapp_enabled: "1",
+  whatsapp_phone_number_id: "",
+  whatsapp_business_account_id: "",
+  whatsapp_access_token: "",
+  whatsapp_catalog_id: "",
+  whatsapp_verify_token: "",
+  whatsapp_app_secret: "",
+  whatsapp_counter_number: "", // staff number that receives new orders
+  whatsapp_display_number: "", // the public business number shown to customers
+  whatsapp_currency: "AUD",
+  whatsapp_publish_enabled: "1",
+  whatsapp_notify_customer: "1",
+  whatsapp_order_greeting:
+    "Assalam-o-Alaikum from Khan Baba! Reply MENU to see today's dishes, or send your order like “2 chicken biryani and 1 garlic naan”.",
+  whatsapp_payment_message:
+    "Your Khan Baba order is ready for payment. Tap the button to pay securely — the counter will send it to the kitchen the moment payment clears.",
+  whatsapp_auto_confirm_paid: "0", // 1 = send straight to the kitchen once paid
+
+  // Central inventory. Stock counts are optional per dish; a tracked dish goes
+  // unavailable (and is unpublished from WhatsApp) at zero.
+  inventory_track_enabled: "1",
+  inventory_decrement_on: "confirm", // confirm | paid
+
+  // ---------------------------------------------------------------------------
+  // Dine-in / table settlement — payment is only taken at the counter, after
+  // the meal. Counter staff park the ticket until the guest settles.
+  // ---------------------------------------------------------------------------
+  dine_in_pay_at_counter_only: "1",
+  table_park_on_ready: "0", // 1 = park automatically when the kitchen bumps
+  feedback_auto_on_table_settle: "1",
+
+  // ---------------------------------------------------------------------------
+  // Guest feedback → Google review drafts
+  // ---------------------------------------------------------------------------
+  feedback_enabled: "1",
+  feedback_google_url: "https://search.google.com/local/writereview?placeid=",
+  feedback_google_place_id: "",
+  feedback_google_location_id: "", // Business Profile location, for reply API
+  feedback_google_access_token: "",
+  feedback_min_rating_to_publish: "4",
+  feedback_bill_range_percent: "10",
+
+  // ---------------------------------------------------------------------------
+  // Lahore cultural theme + music system
+  // ---------------------------------------------------------------------------
+  theme_lahore: "1",            // warm Lahore truck-art palette and motifs
+  music_enabled: "1",
+  music_default_volume: "20",   // deliberately low — ambience, not a concert
+  music_customer_default_muted: "0",
+  music_encouragement_enabled: "1",
+  music_encouragement_track_id: "",
+  music_now_playing_note:
+    "Lahore in the room — qawwali, ghazals and Punjabi folk, kept low so the table can talk.",
+  music_request_enabled: "1",
+  music_request_requires_approval: "1",
+  music_request_base_charge_cents: "500",
+  music_request_peak_charge_cents: "800",
+  music_request_peak_start: "18:00",
+  music_request_peak_end: "21:30",
+  music_request_free_allowed: "1", // staff may waive the charge entirely
+  music_request_max_minutes: "15", // how long an approved on-demand song may run
+  music_pause_during_religious: "1", // never play music over a recitation
 };
 
 /**

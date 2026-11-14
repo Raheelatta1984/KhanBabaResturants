@@ -1207,6 +1207,7 @@ export async function seedDatabase(db: Database): Promise<{ seeded: boolean }> {
     await seedWhatsNew(tx);
     await seedProductionAndOrders(tx);
     await seedPlatformExpansion(tx);
+    await seedLahoreAndWhatsApp(tx);
     return { seeded: true };
   });
 }
@@ -2394,4 +2395,494 @@ async function seedPlatformExpansion(db: Database) {
       'feature','2.0.0',11,'https://github.com/Raheelatta1984/KhanBabaResturants/pull/11',FALSE,
       now() - interval '10 minutes')`,
   );
+}
+
+/* ===========================================================================
+   v3 demo data · the Lahore music room, WhatsApp commerce and guest feedback
+   ========================================================================== */
+
+type VariantPick = {
+  item_id: number;
+  variant_id: number;
+  name: string;
+  label: string;
+  price_cents: number;
+};
+
+/**
+ * Seeds the music library and schedule, a sandbox WhatsApp conversation with a
+ * real order, central stock levels, a parked table bill and a completed meal
+ * with a Google review draft. The audio URLs are clearly-labelled demo files —
+ * a restaurant replaces them from Admin → Music with its own licensed songs.
+ */
+async function seedLahoreAndWhatsApp(db: Database): Promise<void> {
+  const variant = async (slug: string): Promise<VariantPick | null> =>
+    db.maybeOne<VariantPick>(
+      `SELECT mi.id AS item_id, iv.id AS variant_id, mi.name, iv.label, iv.price_cents
+         FROM menu_items mi
+         JOIN item_variants iv ON iv.item_id = mi.id AND iv.active
+        WHERE mi.slug = $1
+        ORDER BY iv.is_default DESC, iv.sort_order, iv.id LIMIT 1`,
+      [slug],
+    );
+
+  const [biryani, butterChicken, naan, lassi, gulabJamun] = await Promise.all([
+    variant("chicken-biryani"),
+    variant("butter-chicken"),
+    variant("garlic-naan"),
+    variant("mango-lassi"),
+    variant("gulab-jamun"),
+  ]);
+
+  await db.query(
+    `INSERT INTO whats_new (title, summary, body, category, version, pinned, published_at)
+     VALUES ('WhatsApp ordering, dine-in settlement and the Lahore music room',
+      'Take orders in WhatsApp, publish the whole menu to the WhatsApp catalogue, settle table bills at the counter, turn feedback into Google review drafts and run the room’s music on a schedule.',
+      'WhatsApp Business is now a first-class channel: the portal publishes every dish to the WhatsApp catalogue with central stock, and a guest can order by messaging the business number. The counter is notified on WhatsApp, accepts the ticket and sends a secure payment link; payment clears, the ticket goes to the kitchen. Dine-in and table orders are settled only at the counter after the meal, and the counter can park the bill until it clears. After settlement a two-tap feedback link produces a Google review draft with the dish photos, the bill range and how many people were served. The room gets a Lahore cultural theme and a scheduled music system — music and religious collections, auto day/time schedules, stop/resume/replay for counter and admin, guest requests with a mandatory link and staff-approved charges that can be waived or adjusted. A religious collection is never interrupted by ambience or the table-order thank-you.',
+      'feature','3.0.0',FALSE,now() - interval '2 minutes')`,
+  );
+
+  // A demo staff number so the sandbox can show exactly where an order lands.
+  // Replace it in Admin → WhatsApp Business with the real counter phone.
+  await db.query(
+    `UPDATE settings SET value = '+61400000000' WHERE key = 'whatsapp_counter_number' AND value = ''`,
+  );
+  await db.query(
+    `UPDATE settings SET value = '+61290001234' WHERE key = 'whatsapp_display_number' AND value = ''`,
+  );
+
+  // ------------------------------------------------------------------ music
+  const track = async (input: {
+    title: string;
+    artist: string;
+    url: string;
+    kind: "music" | "religious";
+    category: string;
+    duration: number;
+    notes?: string;
+  }): Promise<number> =>
+    db.insert(
+      `INSERT INTO music_tracks (title, artist, url, provider, kind, category,
+         duration_seconds, notes, created_by)
+       VALUES ($1,$2,$3,'audio',$4,$5,$6,$7,'seed') RETURNING id`,
+      [
+        input.title,
+        input.artist,
+        input.url,
+        input.kind,
+        input.category,
+        input.duration,
+        input.notes ?? "Demo audio — replace with your licensed recording from the library.",
+      ],
+    );
+
+  const qawwali1 = await track({
+    title: "Lahore evening — qawwali refrain",
+    artist: "House ensemble (demo)",
+    url: "https://www.soundhelix.com/examples/mp3/SoundHelix-Song-1.mp3",
+    kind: "music",
+    category: "qawwali",
+    duration: 372,
+  });
+  const ghazal1 = await track({
+    title: "Chai and a ghazal",
+    artist: "House ensemble (demo)",
+    url: "https://www.soundhelix.com/examples/mp3/SoundHelix-Song-2.mp3",
+    kind: "music",
+    category: "ghazal",
+    duration: 425,
+  });
+  const punjabi1 = await track({
+    title: "Punjabi folk — dholak loop",
+    artist: "House ensemble (demo)",
+    url: "https://www.soundhelix.com/examples/mp3/SoundHelix-Song-3.mp3",
+    kind: "music",
+    category: "punjabi",
+    duration: 298,
+  });
+  const instrumental1 = await track({
+    title: "Sitar at the counter",
+    artist: "House ensemble (demo)",
+    url: "https://www.soundhelix.com/examples/mp3/SoundHelix-Song-4.mp3",
+    kind: "music",
+    category: "instrumental",
+    duration: 341,
+  });
+  const tilawat1 = await track({
+    title: "Tilawat — Surah Al-Fatiha",
+    artist: "Mishary Alafasy",
+    url: "https://everyayah.com/data/Alafasy_128kbps/001001.mp3",
+    kind: "religious",
+    category: "recitation",
+    duration: 34,
+    notes: "Recitation. Ambience and table-order music stay silent while this plays.",
+  });
+  const tilawat2 = await track({
+    title: "Tilawat — Surah Al-Ikhlas",
+    artist: "Mishary Alafasy",
+    url: "https://everyayah.com/data/Alafasy_128kbps/112001.mp3",
+    kind: "religious",
+    category: "recitation",
+    duration: 21,
+    notes: "Recitation. Ambience and table-order music stay silent while this plays.",
+  });
+  const naat1 = await track({
+    title: "Friday naat — evening set",
+    artist: "House reciter (demo)",
+    url: "https://everyayah.com/data/Alafasy_128kbps/002255.mp3",
+    kind: "religious",
+    category: "naat",
+    duration: 58,
+    notes: "Religious set placeholder — upload your licensed naat.",
+  });
+
+  const collection = async (
+    slug: string,
+    name: string,
+    description: string,
+    kind: "music" | "religious",
+    tracks: number[],
+  ): Promise<number> => {
+    const id = await db.insert(
+      `INSERT INTO music_collections (slug, name, description, kind, created_by)
+       VALUES ($1,$2,$3,$4,'seed') RETURNING id`,
+      [slug, name, description, kind],
+    );
+    let position = 1;
+    for (const trackId of tracks) {
+      await db.query(
+        `INSERT INTO music_collection_tracks (collection_id, track_id, position)
+         VALUES ($1,$2,$3) ON CONFLICT DO NOTHING`,
+        [id, trackId, position],
+      );
+      position += 1;
+    }
+    return id;
+  };
+
+  const evening = await collection(
+    "lahore-evening",
+    "Lahore evening",
+    "Qawwali, ghazal and Punjabi folk for the dinner service — kept low.",
+    "music",
+    [qawwali1, ghazal1, punjabi1, instrumental1],
+  );
+  const friday = await collection(
+    "friday-naat",
+    "Friday naat & tilawat",
+    "Devotional set for Friday evening. Ambience stays silent while this plays.",
+    "religious",
+    [naat1, tilawat1, tilawat2],
+  );
+  const morning = await collection(
+    "morning-chai",
+    "Morning chai",
+    "Gentle instrumental set for the quiet hours.",
+    "music",
+    [instrumental1, ghazal1],
+  );
+
+  await db.query(
+    `INSERT INTO music_schedules (collection_id, label, days, start_time, end_time, priority, created_by)
+     VALUES ($1,'Lunch and afternoon',NULL,'11:00','17:00',5,'seed')`,
+    [morning],
+  );
+  await db.query(
+    `INSERT INTO music_schedules (collection_id, label, days, start_time, end_time, priority, created_by)
+     VALUES ($1,'Friday evening naat',5,'17:00','20:00',20,'seed')`,
+    [friday],
+  );
+  await db.query(
+    `INSERT INTO music_schedules (collection_id, label, days, start_time, end_time, priority, created_by)
+     VALUES ($1,'Dinner service',NULL,'17:00','23:30',10,'seed')`,
+    [evening],
+  );
+
+  await db.query(
+    `INSERT INTO music_player (id, collection_id, track_id, status, volume, mode, started_at, updated_at, updated_by)
+     VALUES (1, $1, $2, 'playing', 20, 'auto', now(), now(), 'seed')
+     ON CONFLICT (id) DO UPDATE SET collection_id = EXCLUDED.collection_id,
+       track_id = EXCLUDED.track_id, status = 'playing', volume = 20, mode = 'auto',
+       updated_at = now(), updated_by = 'seed'`,
+    [evening, qawwali1],
+  );
+
+  await db.query(
+    `INSERT INTO music_requests (token, customer_name, phone, table_code, title, url,
+      provider, note, status, charge_cents, created_at)
+     VALUES ('demo-song-request','Hamza R.', '+61412555001','T04',
+      'Mast Qalandar (live)','https://www.soundhelix.com/examples/mp3/SoundHelix-Song-6.mp3',
+      'audio','It is our anniversary — after the mains?','pending',0,now() - interval '4 minutes')`,
+  );
+
+  // -------------------------------------------------------------- inventory
+  const stock = async (slug: string, qty: number, low: number, available = true) => {
+    await db.query(
+      `UPDATE menu_items SET track_stock = TRUE, stock_qty = $1, low_stock_level = $2,
+         is_available = $3, updated_at = now() WHERE slug = $4`,
+      [qty, low, available, slug],
+    );
+    const row = await db.maybeOne<{ id: number }>("SELECT id FROM menu_items WHERE slug = $1", [slug]);
+    if (row) {
+      await db.query(
+        `INSERT INTO inventory_movements (item_id, delta, stock_after, reason, actor, created_at)
+         VALUES ($1,$2,$2,'restock','seed',now() - interval '2 hours')`,
+        [row.id, qty],
+      );
+    }
+  };
+  await stock("chicken-biryani", 18, 5);
+  await stock("butter-chicken", 9, 3);
+  await stock("garlic-naan", 42, 12);
+  if (lassi) await stock("mango-lassi", 6, 4);
+  if (gulabJamun) await stock("gulab-jamun", 0, 4, false);
+
+  // ------------------------------------------------ central channel publishing
+  const webItems = await db.query<{ id: number; slug: string; name: string }>(
+    "SELECT id, slug, name FROM menu_items WHERE published ORDER BY sort_order, id LIMIT 5",
+  );
+  for (const item of webItems) {
+    await db.query(
+      `INSERT INTO channel_publications (channel, entity, entity_ref, external_id, status,
+        message, payload, published_at, updated_at)
+       VALUES ('whatsapp','item',$1,$2,'published',$3,$4,now(),now())
+       ON CONFLICT (channel, entity, entity_ref) DO NOTHING`,
+      [
+        String(item.id),
+        `sandbox-kb-item-${item.id}`,
+        "Sandbox — payload prepared, nothing sent to Meta",
+        JSON.stringify({
+          retailer_id: `kb-item-${item.id}`,
+          name: item.name,
+          availability: "in stock",
+          currency: "AUD",
+        }),
+      ],
+    );
+  }
+
+  // ------------------------------------------------------- WhatsApp sandbox
+  const conversationId = await db.insert(
+    `INSERT INTO whatsapp_conversations (wa_id, display_name, phone, state, order_count,
+      last_inbound_at, last_message_at, created_at)
+     VALUES ('61412345678','Ayesha Khan','+61412345678','idle',1,
+      now() - interval '12 minutes', now() - interval '11 minutes', now() - interval '20 minutes')
+     RETURNING id`,
+  );
+  const waMessages: [string, string, string, string][] = [
+    ["inbound", "text", "2 chicken biryani and 1 garlic naan, table 4 please", "received"],
+    ["outbound", "text", "Shukriya Ayesha! Order KB-DEMO10 is with the counter. Pay at the counter after your meal — the kitchen starts as soon as they accept it.", "sent"],
+    ["outbound", "cta", "New Khan Baba order — Ayesha Khan, table 4. Review and accept it in the counter portal.\n\n[Open counter] /counter?focus=KB-DEMO10", "sent"],
+  ];
+  for (const [direction, kind, body, status] of waMessages) {
+    await db.query(
+      `INSERT INTO whatsapp_messages (direction, wa_id, kind, body, status, conversation_id, created_at)
+       VALUES ($1,'61412345678',$2,$3,$4,$5,now() - interval '12 minutes')`,
+      [direction, kind, body, status, conversationId],
+    );
+  }
+
+  // ------------------------------------------------------------- demo orders
+  const table = await db.maybeOne<{ id: number }>(
+    "SELECT id FROM dining_tables WHERE code = 'T04'",
+  );
+
+  const insertOrder = async (input: {
+    code: string;
+    channel: string;
+    name: string;
+    phone: string | null;
+    status: string;
+    progress: number;
+    paymentStatus: string;
+    paymentRef: string | null;
+    source: string;
+    tableId?: number | null;
+    parked?: boolean;
+    partySize?: number;
+    paymentLinkToken?: string | null;
+    createdMinutesAgo?: number;
+    completed?: boolean;
+    lines: { pick: VariantPick | null; qty: number }[];
+    notes?: string | null;
+    waId?: string | null;
+  }): Promise<{ id: number; total: number } | null> => {
+    const lines = input.lines.filter((line): line is { pick: VariantPick; qty: number } => Boolean(line.pick));
+    if (lines.length === 0) return null;
+    const subtotal = lines.reduce((sum, line) => sum + line.pick.price_cents * line.qty, 0);
+    const id = await db.insert(
+      `INSERT INTO orders (code, tracking_token, channel, source, table_id, customer_name, phone,
+        notes, subtotal_cents, surcharge_cents, total_cents, payment_method, payment_status,
+        payment_ref, status, progress, parked, parked_at, parked_by, party_size,
+        payment_link_token, whatsapp_wa_id, promised_at, created_at, updated_at,
+        confirmed_at, kitchen_started_at, ready_at, completed_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 0, $9, 'counter', $10, $11, $12, $13,
+        $14, $15, $16, $17, $18, $19,
+        now() - interval '40 minutes', now() - interval '60 minutes', now() - interval '10 minutes',
+        now() - interval '50 minutes', now() - interval '45 minutes', now() - interval '35 minutes',
+        $20)
+       RETURNING id`,
+      [
+        input.code,
+        demoTrackingToken(input.code),
+        input.channel,
+        input.source,
+        input.tableId ?? null,
+        input.name,
+        input.phone,
+        input.notes ?? null,
+        subtotal,
+        input.paymentStatus,
+        input.paymentRef,
+        input.status,
+        input.progress,
+        Boolean(input.parked),
+        input.parked ? new Date(Date.now() - 15 * 60_000).toISOString() : null,
+        input.parked ? "Rina Patel" : null,
+        input.partySize ?? 2,
+        input.paymentLinkToken ?? null,
+        input.waId ?? null,
+        input.completed ? new Date(Date.now() - 12 * 60_000).toISOString() : null,
+      ],
+    );
+    for (const line of lines) {
+      await db.query(
+        `INSERT INTO order_items (order_id, item_id, variant_id, name, variant_label, qty,
+          unit_price_cents, line_total_cents, prep_state)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,'ready')`,
+        [
+          id,
+          line.pick.item_id,
+          line.pick.variant_id,
+          line.pick.name,
+          line.pick.label,
+          line.qty,
+          line.pick.price_cents,
+          line.pick.price_cents * line.qty,
+        ],
+      );
+    }
+    await db.query(
+      `INSERT INTO order_events (order_id, type, message, actor, progress, created_at)
+       VALUES ($1,'created','Order placed — ${input.source === "whatsapp" ? "via WhatsApp" : input.channel}','customer',5,now() - interval '60 minutes')`,
+      [id],
+    );
+    return { id, total: subtotal };
+  };
+
+  const meal = await insertOrder({
+    code: "KB-DEMO08",
+    channel: "dine_in",
+    name: "Nadia & family",
+    phone: "+61422555008",
+    status: "completed",
+    progress: 100,
+    paymentStatus: "paid",
+    paymentRef: "counter_cash_demo08",
+    source: "table",
+    partySize: 3,
+    createdMinutesAgo: 90,
+    completed: true,
+    lines: [
+      { pick: butterChicken, qty: 1 },
+      { pick: naan, qty: 2 },
+      { pick: lassi, qty: 1 },
+    ],
+    notes: "Served and settled at the counter after the meal.",
+  });
+
+  await insertOrder({
+    code: "KB-DEMO09",
+    channel: "table",
+    tableId: table?.id ?? null,
+    name: "Table 4 — evening",
+    phone: null,
+    status: "preparing",
+    progress: 46,
+    paymentStatus: "unpaid",
+    paymentRef: null,
+    source: "table",
+    parked: true,
+    partySize: 4,
+    lines: [
+      { pick: biryani, qty: 2 },
+      { pick: naan, qty: 3 },
+    ],
+    notes: "Parked at the counter until the table settles after the meal.",
+  });
+
+  const waOrder = await insertOrder({
+    code: "KB-DEMO10",
+    channel: "table",
+    tableId: table?.id ?? null,
+    name: "Ayesha Khan",
+    phone: "+61412345678",
+    status: "pending_confirm",
+    progress: 5,
+    paymentStatus: "unpaid",
+    paymentRef: null,
+    source: "whatsapp",
+    partySize: 2,
+    paymentLinkToken: "demo-pay-kb-demo10",
+    waId: "61412345678",
+    lines: [
+      { pick: biryani, qty: 2 },
+      { pick: naan, qty: 1 },
+    ],
+    notes: "Ordered in WhatsApp. Confirm with the customer if anything is unclear.",
+  });
+  if (waOrder) {
+    await db.query(
+      `INSERT INTO order_events (order_id, type, message, actor, progress, created_at)
+       VALUES ($1,'whatsapp','Order created from WhatsApp — counter notified on the business number','whatsapp',5,now() - interval '12 minutes')`,
+      [waOrder.id],
+    );
+    await db.query(
+      "UPDATE whatsapp_messages SET order_id = $1 WHERE conversation_id = $2",
+      [waOrder.id, conversationId],
+    );
+  }
+
+  // ------------------------------------------------------ feedback → Google
+  if (meal) {
+    const subtotal = meal.total;
+    const inviteId = await db.insert(
+      `INSERT INTO feedback_invites (order_id, token, channel, party_size, sent_at,
+        submitted_at, rating, comment, highlights, created_at)
+       VALUES ($1,'demo-feedback-kb-demo08','whatsapp',3,now() - interval '30 minutes',
+        now() - interval '25 minutes',5,
+        'The butter chicken had the proper Lahori finish and the naan came out blistering hot.',
+        $2, now() - interval '30 minutes')
+       RETURNING id`,
+      [meal.id, JSON.stringify(["Butter Chicken", "Garlic Naan", "Mango Lassi"])],
+    );
+    const images = await db.query<{ image: string | null }>(
+      `SELECT image FROM menu_items WHERE id = ANY($1::int[]) AND image IS NOT NULL`,
+      [
+        [butterChicken?.item_id, naan?.item_id, lassi?.item_id].filter(
+          (id): id is number => typeof id === "number",
+        ),
+      ],
+    );
+    const body = [
+      "Khan Baba Restaurant was outstanding.",
+      "We were a table of 3 and everything came out together.",
+      "We ordered Butter Chicken, Garlic Naan and Mango Lassi. The butter chicken had the proper Lahori finish and the naan came out blistering hot.",
+      `Bill came to around $${((subtotal * 0.9) / 100).toFixed(2)}–$${((subtotal * 1.1) / 100).toFixed(2)} for 3 people.`,
+      "Photos of what we had are on this review.",
+    ].join(" ");
+    await db.query(
+      `INSERT INTO google_review_drafts (feedback_id, order_id, rating, body, image_refs,
+        bill_cents, party_size, status, google_url, created_at)
+       VALUES ($1,$2,5,$3,$4,$5,3,'draft',$6,now() - interval '24 minutes')`,
+      [
+        inviteId,
+        meal.id,
+        body,
+        JSON.stringify(images.map((row) => row.image).filter(Boolean)),
+        subtotal,
+        "https://www.google.com/maps/search/?api=1&query=Khan%20Baba%20Restaurant",
+      ],
+    );
+  }
 }

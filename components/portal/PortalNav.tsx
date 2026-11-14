@@ -11,6 +11,10 @@ export function PortalNav({ name, role }: { name: string; role: Role }) {
   const router = useRouter();
   const [signingOut, setSigningOut] = useState(false);
   const links = PORTAL_LINKS.filter((link) => link.roles.includes(role));
+  // The Khan Baba logo is the administrator's way home: the command centre with
+  // every option on one page. Other roles go straight to their own queue.
+  const homeHref =
+    role === "admin" || role === "manager" ? "/admin/hub" : links[0]?.href ?? "/";
 
   async function signOut() {
     setSigningOut(true);
@@ -22,7 +26,7 @@ export function PortalNav({ name, role }: { name: string; role: Role }) {
   return (
     <header className="portal-topbar">
       <div className="container portal-topbar-inner">
-        <Link href={links[0]?.href ?? "/admin"} className="brand" style={{ marginRight: 0 }}>
+        <Link href={homeHref} className="brand" style={{ marginRight: 0 }} title="Khan Baba command centre">
           <span className="brand-mark" style={{ width: 34, height: 34, fontSize: "0.95rem" }}>
             KB
           </span>

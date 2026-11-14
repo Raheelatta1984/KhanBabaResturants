@@ -5,6 +5,7 @@ import type { ReactNode } from "react";
 import type { CustomerSession } from "@/lib/auth/customer";
 import { SiteHeader } from "./SiteHeader";
 import { SiteFooter } from "./SiteFooter";
+import { MusicPlayer } from "./MusicPlayer";
 
 const PORTAL_PREFIXES = ["/staff", "/admin", "/counter", "/kitchen", "/delivery"];
 
@@ -28,6 +29,7 @@ export function SiteChrome({
       <SiteHeader customer={customer} />
       <main id="main">{children}</main>
       <SiteFooter restaurant={restaurant} />
+      <MusicPlayer />
     </>
   );
 }

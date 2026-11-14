@@ -7,6 +7,8 @@ import {
   confirmOrder,
   dispatchOrder,
   getOrderById,
+  getOrderItems,
+  getOrderByCode,
   markOrderPaid,
   markOrderReady,
   OrderError,
@@ -16,6 +18,14 @@ import {
 } from "@/lib/orders";
 import { createClaimToken } from "@/lib/auth/customer";
 import { publicBaseUrl } from "@/lib/url";
+import { parkOrder, unparkOrder, settleTableOrder } from "@/lib/dine-in";
+import {
+  notifyCounterNewOrder,
+  notifyCustomerAccepted,
+  requestOrderPayment,
+} from "@/lib/whatsapp/orders";
+import { sendFeedbackInvite } from "@/lib/feedback";
+import { triggerTableEncouragement } from "@/lib/music";
 
 export const dynamic = "force-dynamic";
 
@@ -25,6 +35,7 @@ type Body = {
   state?: "queued" | "preparing" | "ready";
   method?: string;
   reason?: string;
+  channel?: string;
 };
 
 export async function POST(
@@ -42,9 +53,15 @@ export async function POST(
     return NextResponse.json({ error: "Sign in to continue" }, { status: 401 });
 
   const { id } = await context.params;
-  const orderId = Number(id);
-  if (!Number.isInteger(orderId))
-    return NextResponse.json({ error: "Invalid order" }, { status: 400 });
+  const db = await getDb();
+  // Accept either the numeric id or the human order code (KB-XXXX). Staff paste
+  // codes from WhatsApp all day; making them look up a number is friction.
+  let orderId = Number(id);
+  if (!Number.isInteger(orderId)) {
+    const byCode = await getOrderByCode(db, decodeURIComponent(id).toUpperCase());
+    if (!byCode) return NextResponse.json({ error: "Order not found" }, { status: 404 });
+    orderId = byCode.id;
+  }
 
   let body: Body;
   try {
@@ -53,7 +70,6 @@ export async function POST(
     return NextResponse.json({ error: "Invalid request" }, { status: 400 });
   }
 
-  const db = await getDb();
   if (!(await getOrderById(db, orderId)))
     return NextResponse.json({ error: "Order not found" }, { status: 404 });
 
@@ -61,6 +77,9 @@ export async function POST(
     switch (body.action) {
       case "confirm": {
         const order = await confirmOrder(db, orderId, session.name);
+        if (order.phone) {
+          await notifyCustomerAccepted(db, orderId, publicBaseUrl(request)).catch(() => null);
+        }
         return NextResponse.json({
           ok: true,
           order,
@@ -121,6 +140,54 @@ export async function POST(
           body.reason || "Cancelled by staff",
         );
         return NextResponse.json({ ok: true, order });
+      }
+      case "park": {
+        const order = await parkOrder(db, orderId, session.name, body.reason);
+        return NextResponse.json({ ok: true, order });
+      }
+      case "unpark": {
+        const order = await unparkOrder(db, orderId, session.name, body.reason);
+        return NextResponse.json({ ok: true, order });
+      }
+      case "settle-table": {
+        const result = await settleTableOrder(
+          db,
+          orderId,
+          session.name,
+          body.method === "card" ? "card" : "cash",
+          publicBaseUrl(request),
+        );
+        return NextResponse.json({
+          ok: true,
+          order: result.order,
+          feedbackUrl: result.feedbackUrl,
+          whatsappSent: result.whatsappSent,
+        });
+      }
+      case "payment-link": {
+        const result = await requestOrderPayment(db, orderId, session.name, publicBaseUrl(request));
+        return NextResponse.json({ ok: true, ...result });
+      }
+      case "feedback-invite": {
+        const result = await sendFeedbackInvite(db, orderId, publicBaseUrl(request), {
+          channel: body.channel === "link" ? "link" : "whatsapp",
+        });
+        return NextResponse.json({ ok: true, ...result });
+      }
+      case "notify-counter": {
+        const order = await getOrderById(db, orderId);
+        if (!order) throw new OrderError("Order not found", 404);
+        const result = await notifyCounterNewOrder(
+          db,
+          order,
+          await getOrderItems(db, orderId),
+          publicBaseUrl(request),
+        );
+        return NextResponse.json({ ok: true, ...result });
+      }
+      case "encourage-music": {
+        await triggerTableEncouragement(db, orderId, session.name);
+        return NextResponse.json({ ok: true });
       }
       case "claim-link": {
         // A one-time link the counter can text so a guest can attach this order

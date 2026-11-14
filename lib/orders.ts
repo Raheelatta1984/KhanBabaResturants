@@ -23,6 +23,7 @@ import {
 } from "./promotions";
 import { trackingSnapshot, settleDriverJob } from "./drivers";
 import { coordinate, estimateCoordinates, SYDNEY_CBD } from "./geo";
+import { consumeStockForOrder } from "./whatsapp/catalog";
 
 export class OrderError extends Error {
   status: number;
@@ -84,6 +85,12 @@ export type CreateOrderInput = {
   promoCode?: string;
   /** Set by the ordering route from the signed-in customer cookie, never by the browser. */
   customerId?: number | null;
+  /** web | whatsapp | table | pos | counter | phone — where the ticket came from. */
+  source?: string;
+  /** WhatsApp sender (E.164 digits) when the order arrived in the chat. */
+  whatsappWaId?: string | null;
+  /** Guests at the table, used on the feedback → Google review draft. */
+  partySize?: number;
   items: CartLineInput[];
 };
 
@@ -119,6 +126,17 @@ export type OrderRow = {
   delivery_lng: number | null;
   status: OrderStatus;
   progress: number;
+  source: string;
+  whatsapp_wa_id: string | null;
+  payment_link_token: string | null;
+  payment_requested_at: string | null;
+  paid_at: string | null;
+  parked: boolean;
+  parked_at: string | null;
+  parked_by: string | null;
+  party_size: number;
+  music_charge_cents: number;
+  feedback_sent_at: string | null;
   created_at: string;
   updated_at: string;
   confirmed_at: string | null;
@@ -427,6 +445,20 @@ export async function createOrder(
   if (!["delivery", "pickup", "dine_in", "table"].includes(channel))
     throw new OrderError("Unknown service type");
 
+  // Dine-in and table tickets are settled at the counter after the meal. The
+  // setting is enforced here, not in the UI: no online charge can be attached
+  // to a guest sitting at a table, whichever screen posted the order.
+  let paymentMethod = input.paymentMethod;
+  let dineInCoerced = false;
+  if (
+    (channel === "table" || channel === "dine_in") &&
+    (await getSetting("dine_in_pay_at_counter_only", "1")) === "1" &&
+    paymentMethod === "online"
+  ) {
+    paymentMethod = "counter";
+    dineInCoerced = true;
+  }
+
   const name = (input.customerName || "").trim().slice(0, 80);
   if (name.length < 2) throw new OrderError("Please tell us your name");
 
@@ -546,17 +578,17 @@ export async function createOrder(
     promotionLabel: promotionCheck?.label,
   });
 
-  if (channel === "delivery" && input.paymentMethod === "counter") {
+  if (channel === "delivery" && paymentMethod === "counter") {
     throw new OrderError("Delivery orders must be paid online before dispatch");
   }
   if (
-    input.paymentMethod === "counter" &&
+    paymentMethod === "counter" &&
     (await getSetting("pay_at_counter_enabled", "1")) !== "1"
   ) {
     throw new OrderError("Pay at counter is currently unavailable");
   }
   if (
-    input.paymentMethod === "online" &&
+    paymentMethod === "online" &&
     (await getSetting("online_payment_enabled", "1")) !== "1"
   ) {
     throw new OrderError(
@@ -595,9 +627,10 @@ export async function createOrder(
         address, suburb, postcode, notes,
         subtotal_cents, surcharge_cents, surcharge_detail, priority, priority_fee_cents, delivery_fee_cents,
         delivery_cost_cents, total_cents, payment_method, payment_status, status, progress, promised_at,
-        delivery_lat, delivery_lng, discount_cents, promotion_code, payment_option)
+        delivery_lat, delivery_lng, discount_cents, promotion_code, payment_option,
+        source, whatsapp_wa_id, party_size)
        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22,
-        'pending_confirm', 5, $23, $24, $25, $26, $27, $28)
+        'pending_confirm', 5, $23, $24, $25, $26, $27, $28, $29, $30, $31)
        RETURNING id`,
       [
         code,
@@ -620,16 +653,19 @@ export async function createOrder(
         pricing.deliveryFeeCents,
         pricing.deliveryCostCents,
         pricing.totalCents,
-        input.paymentMethod,
-        input.paymentMethod === "counter" ? "unpaid" : "pending",
+        paymentMethod,
+        paymentMethod === "counter" ? "unpaid" : "pending",
         promisedAt,
         deliveryLat,
         deliveryLng,
         pricing.discountCents,
         promotionCheck?.promotion.code ?? null,
-        input.paymentMethod === "online"
+        paymentMethod === "online"
           ? (input.paymentOption ?? "card_visa")
           : null,
+        (input.source ?? "web").slice(0, 20),
+        input.whatsappWaId ? String(input.whatsappWaId).replace(/[^0-9]/g, "").slice(0, 20) : null,
+        Math.min(40, Math.max(1, Number(input.partySize) || 2)),
       ],
     );
 
@@ -658,8 +694,8 @@ export async function createOrder(
       tx,
       id,
       "created",
-      `Order placed — ${channel === "delivery" ? "delivery" : channel === "pickup" ? "click & collect" : channel === "table" ? "table order" : "dine in"}`,
-      "customer",
+      `Order placed — ${channel === "delivery" ? "delivery" : channel === "pickup" ? "click & collect" : channel === "table" ? "table order" : "dine in"}${dineInCoerced ? " · settled at the counter after the meal" : ""}${input.source === "whatsapp" ? " · via WhatsApp" : ""}`,
+      input.source === "whatsapp" ? "whatsapp" : "customer",
       5,
     );
     return id;
@@ -720,7 +756,7 @@ export async function createOrder(
   }
 
   let redirectUrl: string | undefined;
-  if (input.paymentMethod === "online") {
+  if (paymentMethod === "online") {
     const payment = await startPayment({
       orderCode: code,
       amountCents: pricing.totalCents,
@@ -771,7 +807,9 @@ export async function createOrder(
       db,
       orderId,
       "payment",
-      "Payment to be taken at the counter",
+      channel === "table" || channel === "dine_in"
+        ? "Payment to be taken at the counter after the meal"
+        : "Payment to be taken at the counter",
       "customer",
       8,
     );
@@ -827,6 +865,21 @@ export async function confirmOrder(
     actor,
     20,
   );
+  // Central inventory: the accepted ticket is what takes stock off the shelf.
+  // Idempotent per order (see consumeStockForOrder), so a double click cannot
+  // count the same biryani twice.
+  if ((await getSetting("inventory_track_enabled", "1")) === "1") {
+    const { soldOut } = await consumeStockForOrder(db, orderId, actor);
+    if (soldOut.length > 0) {
+      await addEvent(
+        db,
+        orderId,
+        "inventory",
+        `${soldOut.length} dish(es) reached zero stock and were unpublished from the WhatsApp catalogue`,
+        "system",
+      );
+    }
+  }
   return (await getOrderById(db, orderId))!;
 }
 
@@ -942,7 +995,7 @@ export async function markOrderPaid(
   if (!order) throw new OrderError("Order not found", 404);
   if (order.payment_status === "paid") return order;
   await db.query(
-    "UPDATE orders SET payment_status = 'paid', payment_ref = $1, updated_at = now() WHERE id = $2",
+    "UPDATE orders SET payment_status = 'paid', payment_ref = $1, paid_at = now(), updated_at = now() WHERE id = $2",
     [`counter-${method}`, orderId],
   );
   await db.query(
@@ -1272,7 +1325,14 @@ export async function syncDelivery(
 
 export async function listOrders(
   db: Db,
-  opts: { status?: string[]; channel?: string; limit?: number } = {},
+  opts: {
+    status?: string[];
+    channel?: string;
+    limit?: number;
+    source?: string;
+    parked?: boolean;
+    paid?: boolean;
+  } = {},
 ): Promise<OrderRow[]> {
   const clauses: string[] = [];
   const params: unknown[] = [];
@@ -1283,6 +1343,17 @@ export async function listOrders(
   if (opts.channel) {
     clauses.push(`channel = $${params.length + 1}`);
     params.push(opts.channel);
+  }
+  if (opts.source) {
+    clauses.push(`source = $${params.length + 1}`);
+    params.push(opts.source);
+  }
+  if (typeof opts.parked === "boolean") {
+    clauses.push(`parked = $${params.length + 1}`);
+    params.push(opts.parked);
+  }
+  if (typeof opts.paid === "boolean") {
+    clauses.push(`payment_status ${opts.paid ? "=" : "!="} 'paid'`);
   }
   const where = clauses.length ? `WHERE ${clauses.join(" AND ")}` : "";
   params.push(opts.limit ?? 50);

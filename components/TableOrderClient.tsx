@@ -23,12 +23,15 @@ export function TableOrderClient({
   items,
   paymentMode,
   payAtCounterEnabled,
+  payAtCounterOnly = false,
 }: {
   table: { code: string; name: string; zone: string | null; seats: number };
   categories: CategoryView[];
   items: ItemView[];
   paymentMode: "simulated" | "stripe";
   payAtCounterEnabled: boolean;
+  /** House rule: a guest at the table settles at the counter after the meal. */
+  payAtCounterOnly?: boolean;
 }) {
   const router = useRouter();
   const { items: cart, add, setQty, remove, subtotalCents, clear, hydrated } = useCart();
@@ -37,7 +40,9 @@ export function TableOrderClient({
   const [name, setName] = useState(`Table ${table.code.replace("T", "")}`);
   const [phone, setPhone] = useState("");
   const [notes, setNotes] = useState("");
-  const [paymentMethod, setPaymentMethod] = useState<"online" | "counter">("online");
+  const [paymentMethod, setPaymentMethod] = useState<"online" | "counter">(
+    payAtCounterOnly ? "counter" : "online",
+  );
   const [pricing, setPricing] = useState<Pricing | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState("");
@@ -136,7 +141,9 @@ export function TableOrderClient({
           </div>
         </div>
         <div className="tiny muted" style={{ maxWidth: 380 }}>
-          Orders are confirmed by the counter, then cooked to order. You can pay now or settle at the counter.
+          {payAtCounterOnly
+            ? "Order now — the counter accepts it, the kitchen cooks it, and you settle at the counter after your meal. No need to pay at the table."
+            : "Orders are confirmed by the counter, then cooked to order. You can pay now or settle at the counter."}
         </div>
       </div>
 
@@ -279,23 +286,32 @@ export function TableOrderClient({
                   <textarea className="textarea" style={{ minHeight: 64 }} value={notes} onChange={(event) => setNotes(event.target.value)} placeholder="Allergies, no onion…" maxLength={300} />
                 </div>
 
-                <div className="pay-tabs" style={{ marginTop: 14 }}>
-                  <button type="button" className="pay-tab" data-active={paymentMethod === "online" ? "true" : "false"} onClick={() => setPaymentMethod("online")}>
-                    <b>Pay now</b>
-                    <span>{paymentMode === "stripe" ? "Secure card payment" : "Sandbox card"}</span>
-                  </button>
-                  <button
-                    type="button"
-                    className="pay-tab"
-                    data-active={paymentMethod === "counter" ? "true" : "false"}
-                    onClick={() => setPaymentMethod("counter")}
-                    disabled={!payAtCounterEnabled}
-                    style={!payAtCounterEnabled ? { opacity: 0.45, cursor: "not-allowed" } : undefined}
-                  >
-                    <b>Pay at counter</b>
-                    <span>After your meal</span>
-                  </button>
-                </div>
+                {payAtCounterOnly ? (
+                  <div className="notice" style={{ marginTop: 14 }}>
+                    <span>
+                      <strong>Settle at the counter.</strong> Table orders are paid at the counter
+                      after the meal — the counter parks the bill until it clears.
+                    </span>
+                  </div>
+                ) : (
+                  <div className="pay-tabs" style={{ marginTop: 14 }}>
+                    <button type="button" className="pay-tab" data-active={paymentMethod === "online" ? "true" : "false"} onClick={() => setPaymentMethod("online")}>
+                      <b>Pay now</b>
+                      <span>{paymentMode === "stripe" ? "Secure card payment" : "Sandbox card"}</span>
+                    </button>
+                    <button
+                      type="button"
+                      className="pay-tab"
+                      data-active={paymentMethod === "counter" ? "true" : "false"}
+                      onClick={() => setPaymentMethod("counter")}
+                      disabled={!payAtCounterEnabled}
+                      style={!payAtCounterEnabled ? { opacity: 0.45, cursor: "not-allowed" } : undefined}
+                    >
+                      <b>Pay at counter</b>
+                      <span>After your meal</span>
+                    </button>
+                  </div>
+                )}
 
                 {error ? (
                   <div className="notice notice-red" style={{ marginTop: 12 }}>
