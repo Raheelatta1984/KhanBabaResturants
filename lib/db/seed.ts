@@ -2391,6 +2391,7 @@ async function seedPlatformExpansion(db: Database) {
      VALUES ('ERP expansion: every partner in one portal',
       'DoorDash, a verified driver network, live maps, promotions, community returns and a detached Square POS bridge.',
       'Delivery now compares Uber Direct, DoorDash Drive and our own verified drivers. Drivers are onboarded with seven compliance checks, GPS tracking, commission on successful delivery and an ATO cents-per-km CSV. Customers can use Visa, Mastercard, Amex, Afterpay or PayPal and promotion codes; returned untouched meals go to the community through a first-comment-wins Facebook post with the exact thank-you auto-reply and blocked comments. Square POS is a separate synchronisation boundary — the ordering core never depends on it.',
-      'feature','2.0.0',NULL,NULL,FALSE,now() - interval '10 minutes')`,
+      'feature','2.0.0',11,'https://github.com/Raheelatta1984/KhanBabaResturants/pull/11',FALSE,
+      now() - interval '10 minutes')`,
   );
 }
