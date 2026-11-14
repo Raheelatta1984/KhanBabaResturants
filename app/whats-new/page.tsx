@@ -57,6 +57,18 @@ export default async function WhatsNewPage({
       ? all.filter((entry) => entry.category === category)
       : all;
 
+  // `all` leads with the pinned entry, so it is not the newest one. Work the
+  // summary figures out from the publish dates instead — otherwise a pinned
+  // note silently freezes "Latest release" and "Last change" on the date it
+  // was written.
+  const newestFirst = [...all].sort(
+    (a, b) =>
+      new Date(b.published_at).getTime() - new Date(a.published_at).getTime(),
+  );
+  const latest = newestFirst[0] ?? null;
+  const latestVersion =
+    newestFirst.find((entry) => entry.version)?.version ?? "1.0.0";
+
   return (
     <>
       <section className="whatsnew-hero">
@@ -94,7 +106,7 @@ export default async function WhatsNewPage({
               >
                 Latest release
               </div>
-              <div className="strong">{all[0]?.version ?? "1.0.0"}</div>
+              <div className="strong">{latestVersion}</div>
             </div>
             <div>
               <div
@@ -121,7 +133,7 @@ export default async function WhatsNewPage({
                 Last change
               </div>
               <div className="strong">
-                {all[0] ? formatDate(all[0].published_at.slice(0, 10)) : "—"}
+                {latest ? formatDate(latest.published_at.slice(0, 10)) : "—"}
               </div>
             </div>
           </div>
