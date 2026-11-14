@@ -10,10 +10,17 @@ const DEMO_ACCOUNTS = [
   { email: "delivery@khanbaba.com.au", role: "Delivery" },
 ];
 
-export function LoginForm({ nextPath }: { nextPath?: string }) {
+export function LoginForm({
+  nextPath,
+  demo = false,
+}: {
+  nextPath?: string;
+  /** Show and prefill the demo logins. Off once the demo credentials are retired. */
+  demo?: boolean;
+}) {
   const router = useRouter();
-  const [email, setEmail] = useState("admin@khanbaba.com.au");
-  const [password, setPassword] = useState("KhanBaba2026!");
+  const [email, setEmail] = useState(demo ? "admin@khanbaba.com.au" : "");
+  const [password, setPassword] = useState(demo ? "KhanBaba2026!" : "");
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
 
@@ -52,23 +59,25 @@ export function LoginForm({ nextPath }: { nextPath?: string }) {
         {loading ? "Signing in…" : "Sign in"}
       </button>
 
-      <div className="demo-accounts">
-        <span className="label">Demo accounts · password KhanBaba2026!</span>
-        {DEMO_ACCOUNTS.map((account) => (
-          <button
-            key={account.email}
-            type="button"
-            className="demo-account"
-            onClick={() => {
-              setEmail(account.email);
-              setPassword("KhanBaba2026!");
-            }}
-          >
-            <span>{account.role}</span>
-            <code>{account.email}</code>
-          </button>
-        ))}
-      </div>
+      {demo ? (
+        <div className="demo-accounts">
+          <span className="label">Demo accounts · password KhanBaba2026!</span>
+          {DEMO_ACCOUNTS.map((account) => (
+            <button
+              key={account.email}
+              type="button"
+              className="demo-account"
+              onClick={() => {
+                setEmail(account.email);
+                setPassword("KhanBaba2026!");
+              }}
+            >
+              <span>{account.role}</span>
+              <code>{account.email}</code>
+            </button>
+          ))}
+        </div>
+      ) : null}
     </form>
   );
 }

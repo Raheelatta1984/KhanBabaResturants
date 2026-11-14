@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { getDb } from "@/lib/db";
 import { verifyPassword } from "@/lib/auth/password";
+import { passwordFingerprint } from "@/lib/auth/users";
 import {
   createSessionToken,
   SESSION_COOKIE,
@@ -84,6 +85,7 @@ export async function POST(request: Request) {
     name: staff.name,
     email: staff.email,
     role: staff.role,
+    pv: passwordFingerprint(staff.password_hash),
   });
 
   const response = NextResponse.json({

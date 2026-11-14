@@ -39,6 +39,10 @@ Password for every demo account: **`KhanBaba2026!`**
 | Admin    | `/admin`    | `admin@khanbaba.com.au`    | Everything                           |
 | Manager  | `/admin`    | `manager@khanbaba.com.au`  | Everything except admin-only actions |
 
+These logins are for the demo only. Before real customers use the site, open
+**Admin → Users & access** and press **Remove demo credentials** (see
+[Users & access](#users--access) below).
+
 ### Demo customer accounts
 
 Same password, **`KhanBaba2026!`**:
@@ -52,6 +56,24 @@ Demo customer flows: `/table/T04` (table QR), `/menu` → checkout, `/order/KB-D
 (live tracking by code), `/t/demo-kb-demo01-token` (the shareable link), `/track`
 (find an order from a code *or* a link), `/login` (sign in / create an account),
 `/account` (history, live orders, saved details).
+
+### Users & access
+
+`/admin/staff` (administrators and managers) is where every login is managed:
+
+- **Staff**: create a login, edit the name, sign-in email and role, reset a password (with a generated one), disable
+  or delete the account. The role decides which portals open: counter, kitchen, delivery, manager (admin console and
+  every portal) or administrator (everything).
+- **Customers**: set or reset a customer's password and disable or enable the login.
+- **My password**: every staff member changes their own at `/staff/password` (the shield icon in the portal bar).
+- **Rules**: managers cannot create, edit or become administrators; nobody can change their own role or disable
+  themselves; the last active administrator cannot be demoted, disabled or deleted.
+- **Sessions follow the database**: each request re-checks the account, so a disabled account, a role change or a
+  password reset applies on the next click instead of when the 12-hour cookie expires.
+- **Remove demo credentials** (administrator only) is the go-live step. It sets a real password on your own account,
+  disables every other account still on the demo password (reset the password, then enable it again), removes the
+  two demo customer logins while keeping their orders, and stops `/staff/login` listing and prefilling demo logins.
+  The demo password cannot be chosen for any account.
 
 ---
 
@@ -278,7 +300,8 @@ vercel --prod
 ```
 
 `vercel.json` pins the `syd1` region. The first request to any instance creates the schema (`CREATE TABLE IF NOT EXISTS`
-for all 20 tables, so it doubles as the migration) and seeds the demo dataset exactly once — a Postgres advisory lock
+for all 23 tables, plus `ALTER TABLE … ADD COLUMN IF NOT EXISTS` for columns added to an existing table by a
+later release, so it doubles as the migration) and seeds the demo dataset exactly once — a Postgres advisory lock
 makes concurrent cold starts safe, so a fresh database never gets two menus. Nothing else to run: no migration command,
 no seed script in the build.
 

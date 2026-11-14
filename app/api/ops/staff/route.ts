@@ -1,12 +1,23 @@
 import { NextResponse } from "next/server";
 import { getDb } from "@/lib/db";
 import { getApiSession } from "@/lib/auth/api";
-import { hashPassword } from "@/lib/auth/password";
+import { refreshStaffCookie } from "@/lib/auth/staff-cookie";
+import {
+  UserAdminError,
+  createStaff,
+  deleteStaff,
+  goLive,
+  resetStaffPassword,
+  setStaffActive,
+  updateStaff,
+} from "@/lib/auth/users";
 
 export const dynamic = "force-dynamic";
 
-const ROLES = ["admin", "manager", "counter", "kitchen", "delivery"];
-
+/**
+ * POST /api/ops/staff — team administration for administrators and managers.
+ * The permission rules live in lib/auth/users.ts.
+ */
 export async function POST(request: Request) {
   const session = await getApiSession(["admin", "manager"]);
   if (!session)
@@ -21,87 +32,55 @@ export async function POST(request: Request) {
 
   const db = await getDb();
   const action = String(body.action ?? "");
+  const id = Number(body.id);
 
-  if (action === "create") {
-    const name = String(body.name ?? "").trim();
-    const email = String(body.email ?? "")
-      .trim()
-      .toLowerCase();
-    const role = String(body.role ?? "counter");
-    const password = String(body.password ?? "");
-    if (name.length < 2)
-      return NextResponse.json({ error: "Name is required" }, { status: 400 });
-    if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email))
-      return NextResponse.json(
-        { error: "Enter a valid email" },
-        { status: 400 },
-      );
-    if (!ROLES.includes(role))
-      return NextResponse.json({ error: "Unknown role" }, { status: 400 });
-    if (password.length < 8)
-      return NextResponse.json(
-        { error: "Password must be at least 8 characters" },
-        { status: 400 },
-      );
-    if (session.role === "manager" && role === "admin") {
-      return NextResponse.json(
-        { error: "Only an administrator can create another administrator" },
-        { status: 403 },
-      );
+  try {
+    switch (action) {
+      case "create":
+        await createStaff(db, session, body);
+        return NextResponse.json({ ok: true }, { status: 201 });
+      case "update":
+        await updateStaff(db, session, id, body);
+        return NextResponse.json({ ok: true });
+      case "toggle": {
+        const row = await db.maybeOne<{ active: boolean }>(
+          "SELECT active FROM staff WHERE id = $1",
+          [Number.isInteger(id) ? id : -1],
+        );
+        await setStaffActive(db, session, id, !(row?.active ?? false));
+        return NextResponse.json({ ok: true });
+      }
+      case "password":
+        await resetStaffPassword(db, session, id, String(body.password ?? ""));
+        return NextResponse.json({ ok: true });
+      case "delete":
+        await deleteStaff(db, session, id);
+        return NextResponse.json({ ok: true });
+      case "go_live": {
+        const result = await goLive(
+          db,
+          session,
+          body.password ? String(body.password) : undefined,
+        );
+        const response = NextResponse.json({
+          ok: true,
+          disabledStaff: result.disabledStaff,
+          removedCustomers: result.removedCustomers,
+        });
+        if (result.passwordHash)
+          await refreshStaffCookie(response, session, result.passwordHash);
+        return response;
+      }
+      default:
+        return NextResponse.json({ error: "Unknown action" }, { status: 400 });
     }
-    const exists = await db.maybeOne(
-      "SELECT id FROM staff WHERE lower(email) = $1",
-      [email],
-    );
-    if (exists)
+  } catch (error) {
+    if (error instanceof UserAdminError)
       return NextResponse.json(
-        { error: "That email already has an account" },
-        { status: 409 },
+        { error: error.message },
+        { status: error.status },
       );
-    await db.query(
-      "INSERT INTO staff (name, email, role, password_hash) VALUES ($1, $2, $3, $4)",
-      [name, email, role, hashPassword(password)],
-    );
-    return NextResponse.json({ ok: true }, { status: 201 });
+    console.error("staff admin action failed", error);
+    return NextResponse.json({ error: "Could not save" }, { status: 500 });
   }
-
-  if (action === "toggle") {
-    const id = Number(body.id);
-    if (id === session.id)
-      return NextResponse.json(
-        { error: "You cannot deactivate your own account" },
-        { status: 400 },
-      );
-    const row = await db.maybeOne<{ active: boolean }>(
-      "SELECT active FROM staff WHERE id = $1",
-      [id],
-    );
-    if (!row)
-      return NextResponse.json(
-        { error: "Staff member not found" },
-        { status: 404 },
-      );
-    await db.query("UPDATE staff SET active = $1 WHERE id = $2", [
-      !row.active,
-      id,
-    ]);
-    return NextResponse.json({ ok: true });
-  }
-
-  if (action === "password") {
-    const id = Number(body.id);
-    const password = String(body.password ?? "");
-    if (password.length < 8)
-      return NextResponse.json(
-        { error: "Password must be at least 8 characters" },
-        { status: 400 },
-      );
-    await db.query("UPDATE staff SET password_hash = $1 WHERE id = $2", [
-      hashPassword(password),
-      id,
-    ]);
-    return NextResponse.json({ ok: true });
-  }
-
-  return NextResponse.json({ error: "Unknown action" }, { status: 400 });
 }

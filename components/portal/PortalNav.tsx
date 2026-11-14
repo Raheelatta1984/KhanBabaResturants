@@ -48,6 +48,9 @@ export function PortalNav({ name, role }: { name: string; role: Role }) {
           <Link href="/" className="btn btn-ghost btn-sm" title="Open the customer website">
             <Icon name="eye" size={14} />
           </Link>
+          <Link href="/staff/password" className="btn btn-ghost btn-sm" title="Change your password" aria-label="Change your password">
+            <Icon name="shield" size={14} />
+          </Link>
           <button type="button" className="btn btn-ghost btn-sm" onClick={signOut} disabled={signingOut} title="Sign out">
             <Icon name="logout" size={14} />
           </button>
