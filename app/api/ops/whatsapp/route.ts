@@ -5,6 +5,8 @@ import { publicBaseUrl } from "@/lib/url";
 import { getSettings, settingValue } from "@/lib/settings";
 import {
   sendWhatsAppText,
+  sendWhatsAppTemplate,
+  checkWhatsAppConnection,
   touchConversation,
   whatsappConfig,
   whatsappChatLink,
@@ -32,6 +34,8 @@ type Body = {
   lowStockLevel?: number;
   available?: boolean;
   channel?: string;
+  /** Optional template name for the live test send (defaults to hello_world). */
+  template?: string;
 };
 
 /**
@@ -94,6 +98,20 @@ export async function POST(request: Request) {
           message: `${item.name}: ${item.track_stock ? `${item.stock_qty ?? 0} in stock` : "stock not tracked"}${item.is_available ? "" : " · unavailable"}`,
         });
       }
+      case "check": {
+        if (!isManager) return NextResponse.json({ error: "Managers only" }, { status: 403 });
+        const connection = await checkWhatsAppConnection();
+        return NextResponse.json(
+          {
+            ok: connection.ok,
+            connection,
+            message: connection.ok
+              ? `Connected as ${connection.verifiedName || "the business"} (${connection.displayPhoneNumber || "number hidden"}) — live mode.`
+              : `Not connected: ${connection.error}${connection.hint ? ` — ${connection.hint}` : ""}`,
+          },
+          { status: connection.ok ? 200 : 502 },
+        );
+      }
       case "test": {
         const settings = await getSettings();
         const config = await whatsappConfig();
@@ -101,18 +119,89 @@ export async function POST(request: Request) {
           normalisePhone(body.to) ||
           normalisePhone(settingValue(settings, "whatsapp_counter_number", ""));
         if (!target)
-          throw new Error("Add a counter WhatsApp number in the settings below, or type a number to test");
-        const result = await sendWhatsAppText({
-          db,
-          to: target,
-          body: `Khan Baba WhatsApp test message from ${session.name}. Channel mode: ${config.mode}. Reply MENU to see the live menu.`,
-        });
+          throw new Error(
+            "Type the number that should receive the message, or add a counter WhatsApp number in the settings below",
+          );
+
+        const text =
+          (body.body ?? "").trim() ||
+          `Khan Baba WhatsApp test from ${session.name}. Reply MENU to see the live menu.`;
+
+        // Sandbox: record exactly what the customer would have received.
+        if (!config.configured) {
+          const result = await sendWhatsAppText({ db, to: target, body: text });
+          return NextResponse.json({
+            ok: true,
+            mode: "sandbox",
+            result,
+            message: `Sandbox — logged for +${target}, nothing left the building. Add the phone number id and access token below (or in Vercel) to send for real.`,
+          });
+        }
+
+        // Live. Meta only lets a business *start* a conversation with an
+        // approved template; free text is allowed only inside the 24-hour
+        // window that opens when the customer messages us. So pick the order
+        // that fits whether this customer has an open window.
+        const conversation = await db.maybeOne<{ last_inbound_at: string | null }>(
+          "SELECT last_inbound_at FROM whatsapp_conversations WHERE wa_id = $1",
+          [target],
+        );
+        const windowOpen = conversation?.last_inbound_at
+          ? Date.now() - new Date(conversation.last_inbound_at).getTime() <
+            24 * 60 * 60 * 1000
+          : false;
+
+        const attempts: string[] = [];
+        const sendText = () => sendWhatsAppText({ db, to: target, body: text });
+        const sendTemplate = (language: string) =>
+          sendWhatsAppTemplate({
+            db,
+            to: target,
+            name: String(body.template ?? "hello_world"),
+            language,
+          });
+
+        let result = windowOpen ? await sendText() : await sendTemplate("en_US");
+        attempts.push(
+          `${windowOpen ? "text" : "template hello_world (en_US)"}: ${result.ok ? "ok" : result.error}`,
+        );
+
+        if (!result.ok && !windowOpen && result.errorCode === 132001) {
+          result = await sendTemplate("en");
+          attempts.push(`template hello_world (en): ${result.ok ? "ok" : result.error}`);
+        }
+        if (!result.ok) {
+          // The template may be missing while the customer *is* reachable: try
+          // the plain message before giving up.
+          const fallback = windowOpen ? await sendTemplate("en_US") : await sendText();
+          attempts.push(`${windowOpen ? "template" : "text"}: ${fallback.ok ? "ok" : fallback.error}`);
+          if (fallback.ok) result = fallback;
+          else if (!result.hint) result = { ...result, hint: fallback.hint };
+        }
+
+        if (!result.ok) {
+          return NextResponse.json(
+            {
+              ok: false,
+              attempts,
+              result,
+              error: `WhatsApp could not deliver to +${target}: ${result.error}${result.hint ? ` — ${result.hint}` : ""}`,
+            },
+            { status: 502 },
+          );
+        }
+
+        const viaTemplate = !windowOpen;
         return NextResponse.json({
           ok: true,
+          mode: "live",
+          attempts,
           result,
-          message: result.sandbox
-            ? `Sandbox — message logged for +${target}. Add WhatsApp Cloud API credentials to send for real.`
-            : `Sent to +${target}`,
+          message: `Delivered to +${target}${result.messageId ? ` (id ${result.messageId})` : ""}. ${
+            viaTemplate
+              ? "That was the hello_world template so it can open a brand-new conversation — the customer's reply reopens free text for 24 hours."
+              : "The customer has an open 24-hour window, so this went as a normal message."
+          }`,
         });
       }
       case "send": {
@@ -121,6 +210,16 @@ export async function POST(request: Request) {
         if (!to) throw new Error("A recipient number is required");
         if (text.length < 2) throw new Error("Write a message first");
         const result = await sendWhatsAppText({ db, to, body: text });
+        if (!result.ok) {
+          return NextResponse.json(
+            {
+              ok: false,
+              result,
+              error: `${result.error}${result.hint ? ` — ${result.hint}` : ""}`,
+            },
+            { status: 502 },
+          );
+        }
         return NextResponse.json({
           ok: true,
           result,

@@ -244,9 +244,17 @@ export default async function AdminWhatsAppPage() {
               endpoint="/api/ops/whatsapp"
               payload={{ action: "test" }}
               className="btn btn-outline btn-sm"
-              successMessage="Test message sent"
+              successMessage="Test sent to the counter number"
             >
-              Test message
+              Test to counter
+            </OpsButton>
+            <OpsButton
+              endpoint="/api/ops/whatsapp"
+              payload={{ action: "check" }}
+              className="btn btn-outline btn-sm"
+              successMessage="Credentials work — connected"
+            >
+              <Icon name="shield" size={13} /> Check connection
             </OpsButton>
             <Link href="/music" className="btn btn-ghost btn-sm">
               <Icon name="eye" size={13} /> Guest site
@@ -261,6 +269,40 @@ export default async function AdminWhatsAppPage() {
                 : "Messages are delivered through the Cloud API. Inbound messages are verified against WHATSAPP_APP_SECRET and answered by the order parser."}
             </span>
           </div>
+
+          <div className="panel-head" style={{ marginTop: 18 }}>
+            <h3>Send a real WhatsApp test</h3>
+            <span className="tiny muted">Straight to that phone — customer or your own</span>
+          </div>
+          <p className="tiny muted" style={{ marginTop: 0 }}>
+            A customer who has never messaged the business cannot be sent free text — Meta only
+            allows an approved template to open the conversation. This form works that out for you:
+            if that number has messaged the business in the last 24 hours your message goes as
+            written, otherwise the pre-approved <code>hello_world</code> template is sent first.
+            While the Meta app is in Development mode only numbers added as test recipients in
+            WhatsApp Manager can receive anything.
+          </p>
+          <ActionForm
+            endpoint="/api/ops/whatsapp"
+            action="test"
+            submitLabel="Send test message"
+            fields={[
+              {
+                name: "to",
+                label: "Recipient WhatsApp number",
+                placeholder: "+61412345678",
+                help: "Country code, no spaces. This is the phone that should buzz.",
+              },
+              {
+                name: "body",
+                label: "Message (optional)",
+                type: "textarea",
+                full: true,
+                placeholder: "Left blank, a short Khan Baba test greeting is used.",
+                help: "Used when the 24-hour window is open. A template is used when it is not.",
+              },
+            ]}
+          />
         </section>
 
         <section className="panel">

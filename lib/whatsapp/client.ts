@@ -180,12 +180,41 @@ export async function touchConversation(
   return row;
 }
 
+export type GraphResult = {
+  ok: boolean;
+  data: Record<string, unknown>;
+  error?: string;
+  /** Meta's numeric error code — the only reliable way to tell the failures apart. */
+  code?: number;
+  subcode?: number;
+};
+
+type GraphErrorBody = {
+  error?: {
+    message?: string;
+    code?: number;
+    error_subcode?: number;
+    error_user_msg?: string;
+  };
+};
+
+function graphFailure(data: Record<string, unknown>, status: number): GraphResult {
+  const error = (data as GraphErrorBody).error;
+  return {
+    ok: false,
+    data,
+    error: error?.error_user_msg || error?.message || `WhatsApp API returned ${status}`,
+    code: error?.code,
+    subcode: error?.error_subcode,
+  };
+}
+
 /** The Graph API POST, or null in sandbox mode. */
 async function postGraph(
   config: WhatsAppConfig,
   path: string,
   body: unknown,
-): Promise<{ ok: boolean; data: Record<string, unknown>; error?: string }> {
+): Promise<GraphResult> {
   if (!config.configured) return { ok: false, data: {}, error: "not configured" };
   try {
     const response = await fetch(`${GRAPH_BASE}/${path}`, {
@@ -197,12 +226,7 @@ async function postGraph(
       body: JSON.stringify(body),
     });
     const data = (await response.json().catch(() => ({}))) as Record<string, unknown>;
-    if (!response.ok) {
-      const message =
-        (data.error as { message?: string } | undefined)?.message ??
-        `WhatsApp API returned ${response.status}`;
-      return { ok: false, data, error: message };
-    }
+    if (!response.ok) return graphFailure(data, response.status);
     return { ok: true, data };
   } catch (error) {
     return {
@@ -213,11 +237,116 @@ async function postGraph(
   }
 }
 
+/** The Graph API GET — used to prove a token and phone number id actually work. */
+async function getGraph(config: WhatsAppConfig, path: string): Promise<GraphResult> {
+  if (!config.configured) return { ok: false, data: {}, error: "not configured" };
+  try {
+    const response = await fetch(`${GRAPH_BASE}/${path}`, {
+      headers: { Authorization: `Bearer ${config.accessToken}` },
+      cache: "no-store",
+    });
+    const data = (await response.json().catch(() => ({}))) as Record<string, unknown>;
+    if (!response.ok) return graphFailure(data, response.status);
+    return { ok: true, data };
+  } catch (error) {
+    return {
+      ok: false,
+      data: {},
+      error: error instanceof Error ? error.message : "WhatsApp API request failed",
+    };
+  }
+}
+
+/**
+ * Meta's error codes, translated into the next action a restaurant owner can
+ * actually take. Without this a failed test just says "WhatsApp API returned
+ * 400" and the cause — usually the 24-hour window or the test-recipient list —
+ * stays invisible.
+ */
+export function whatsappErrorHint(code?: number, subcode?: number): string | undefined {
+  switch (code) {
+    case 190:
+      return "The access token is invalid or expired. Generate a permanent System-user token in Meta → Business settings and update WHATSAPP_ACCESS_TOKEN.";
+    case 100:
+      return subcode === 33
+        ? "The phone number id does not belong to this token. Check WHATSAPP_PHONE_NUMBER_ID against Meta → WhatsApp → API setup."
+        : "Meta rejected the request. Check the phone number id and the recipient format (digits only, with the country code).";
+    case 131030:
+      return "That number is not allowed to receive messages yet. While the Meta app is in Development mode only the test recipients added in WhatsApp Manager can be messaged — add the customer's number there (up to 5).";
+    case 131047:
+      return "The 24-hour customer-service window is closed: the customer has not messaged the business in the last 24 hours, so only an approved template can start the conversation.";
+    case 131026:
+      return "The recipient cannot receive this message — usually an incorrect or non-WhatsApp number.";
+    case 131031:
+      return "The WhatsApp Business account is restricted or its payment method is not set up.";
+    case 132000:
+    case 132001:
+      return "That message template does not exist for this account, or the language code is wrong. The default hello_world template is en_US.";
+    case 132005:
+      return "The template needs more parameters than were supplied.";
+    case 131056:
+      return "Too many messages to the same number in a short time. Wait a few minutes and try again.";
+    case 4:
+      return "Meta's rate limit for the account was hit. Wait a few minutes and retry.";
+    default:
+      return undefined;
+  }
+}
+
+export type WhatsAppConnection = {
+  ok: boolean;
+  mode: "live" | "sandbox";
+  verifiedName?: string;
+  displayPhoneNumber?: string;
+  qualityRating?: string;
+  error?: string;
+  hint?: string;
+};
+
+/**
+ * Confirm the configured credentials work before blaming the message: reads the
+ * phone number object itself. This is the difference between "the token is
+ * wrong" and "the customer is not a test recipient".
+ */
+export async function checkWhatsAppConnection(): Promise<WhatsAppConnection> {
+  const config = await whatsappConfig();
+  if (!config.configured) {
+    return {
+      ok: false,
+      mode: "sandbox",
+      error: "No phone number id or access token configured",
+      hint: "Add WHATSAPP_PHONE_NUMBER_ID and WHATSAPP_ACCESS_TOKEN, or fill them in the settings below.",
+    };
+  }
+  const result = await getGraph(
+    config,
+    `${config.phoneNumberId}?fields=verified_name,display_phone_number,quality_rating`,
+  );
+  if (!result.ok) {
+    return {
+      ok: false,
+      mode: "live",
+      error: result.error,
+      hint: whatsappErrorHint(result.code, result.subcode),
+    };
+  }
+  return {
+    ok: true,
+    mode: "live",
+    verifiedName: String(result.data.verified_name ?? ""),
+    displayPhoneNumber: String(result.data.display_phone_number ?? ""),
+    qualityRating: String(result.data.quality_rating ?? ""),
+  };
+}
+
 export type SendResult = {
   ok: boolean;
   sandbox: boolean;
   messageId: string | null;
   error?: string;
+  /** Meta's error code, so the caller can explain the failure precisely. */
+  errorCode?: number;
+  hint?: string;
 };
 
 type SendOptions = {
@@ -234,7 +363,7 @@ async function finishSend(
   waId: string,
   kind: string,
   body: string,
-  result: { ok: boolean; data: Record<string, unknown>; error?: string },
+  result: GraphResult,
 ): Promise<SendResult> {
   const messageId =
     (result.data.messages as { id?: string }[] | undefined)?.[0]?.id ?? null;
@@ -255,6 +384,8 @@ async function finishSend(
     sandbox: !config.configured,
     messageId,
     error: result.error,
+    errorCode: result.code,
+    hint: result.ok ? undefined : whatsappErrorHint(result.code, result.subcode),
   };
 }
 
