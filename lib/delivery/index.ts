@@ -8,6 +8,7 @@ import {
   doordashConfigured,
 } from "./doordash";
 import { OwnFleetProvider } from "./fleet";
+import { quoteFromZones } from "./zones";
 import type {
   DeliveryProvider,
   ProviderQuote,
@@ -132,6 +133,25 @@ export async function quoteDelivery(
       ? await configuredProviders(db)
       : [forced[mode] ?? "simulated"];
 
+  // Who is allowed to answer "we can deliver there".
+  //
+  // A forced provider used to bypass the zone check entirely: with
+  // `delivery_provider = simulated` any postcode was priced by the sandbox
+  // hash, including addresses the kitchen does not serve. The zone rate card
+  // now answers serviceability first, whatever provider is forced, so the
+  // question "do you deliver to me?" has one answer in every mode.
+  const forcedZone = await quoteFromZones(db, {
+    address: request.dropoffAddress,
+    suburb: request.dropoffSuburb,
+    postcode: request.dropoffPostcode,
+    lat: request.dropoffLat,
+    lng: request.dropoffLng,
+    orderValueCents: request.orderValueCents,
+  });
+  if (!forcedZone.serviceable) {
+    throw new Error(forcedZone.note);
+  }
+
   const attempts = await Promise.all(
     names.map(async (name) => {
       try {
@@ -152,21 +172,50 @@ export async function quoteDelivery(
     (entry): entry is { name: string; quote: ProviderQuote; error: null } =>
       entry.quote !== null,
   );
+
+  // No partner could quote. The zone rate card — read from Postgres — is the
+  // answer, not a hash of the address. It also knows which postcodes we serve,
+  // so an address outside the area is refused honestly instead of being priced.
+  const zone = successful.length
+    ? null
+    : await quoteFromZones(db, {
+        address: request.dropoffAddress,
+        suburb: request.dropoffSuburb,
+        postcode: request.dropoffPostcode,
+        lat: request.dropoffLat,
+        lng: request.dropoffLng,
+        orderValueCents: request.orderValueCents,
+      });
+
+  if (zone && !zone.serviceable) {
+    throw new Error(zone.note);
+  }
+
   const quote: ProviderQuote = successful.length
     ? successful.sort((a, b) =>
         strategy === "fastest"
           ? a.quote.etaMinutes - b.quote.etaMinutes
           : a.quote.feeCents - b.quote.feeCents,
       )[0].quote
-    : await new SimulatedProvider(db).quote(request);
+    : {
+        provider: "zone_rate_card",
+        quoteId: `zone_q_${Date.now().toString(36)}`,
+        feeCents: zone?.feeCents ?? 0,
+        etaMinutes: zone?.etaMinutes ?? 30,
+        expiresAt: new Date(Date.now() + 30 * 60_000).toISOString(),
+        live: false,
+        distanceKm: zone?.distanceKm ?? undefined,
+        raw: { zone: zone?.zoneName ?? null, postcode: zone?.postcode ?? null },
+      };
 
   let fallbackReason: string | undefined;
-  if (!successful.length && mode !== "simulated") {
+  if (!successful.length) {
     fallbackReason =
       attempts.map((a) => a.error).filter(Boolean).join("; ") ||
-      "No courier partner is configured — using the sandbox rate card";
+      (zone
+        ? `No courier partner is configured — priced from the ${zone.zoneName} delivery zone`
+        : "No courier partner is configured — using the sandbox rate card");
   }
-
   const { customerFeeCents, serviceFeeCents } = await applyDeliveryMargin(
     quote.feeCents,
   );
@@ -182,8 +231,18 @@ export async function quoteDelivery(
     live: quote.live,
     raw: {
       ...(typeof quote.raw === "object" && quote.raw ? quote.raw : {}),
-      distanceKm: quote.distanceKm,
+      distanceKm: quote.distanceKm ?? zone?.distanceKm ?? undefined,
       fallbackReason,
+      deliveryZone: zone
+        ? {
+            name: zone.zoneName,
+            postcode: zone.postcode,
+            serviceable: zone.serviceable,
+            freeDelivery: zone.freeDelivery,
+            minOrderCents: zone.minOrderCents,
+            note: zone.note,
+          }
+        : undefined,
       compared: attempts.map((entry) => ({
         provider: entry.name,
         feeCents: entry.quote?.feeCents ?? null,

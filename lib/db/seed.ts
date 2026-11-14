@@ -1208,6 +1208,7 @@ export async function seedDatabase(db: Database): Promise<{ seeded: boolean }> {
     await seedProductionAndOrders(tx);
     await seedPlatformExpansion(tx);
     await seedLahoreAndWhatsApp(tx);
+    await seedDeliveryZones(tx);
     return { seeded: true };
   });
 }
@@ -2883,6 +2884,67 @@ async function seedLahoreAndWhatsApp(db: Database): Promise<void> {
         subtotal,
         "https://www.google.com/maps/search/?api=1&query=Khan%20Baba%20Restaurant",
       ],
+    );
+  }
+}
+
+/**
+ * Sydney delivery zones.
+ *
+ * Read from the map, not invented: the kitchen sits on the CBD fringe, so the
+ * inner ring is on foot, the middle ring is a short drive, and 2770 (Mount
+ * Druitt / Willmot / Emerton) is the western edge of what a single kitchen can
+ * reach without the food going cold. Fees are deliberately whole dollars so
+ * staff can quote them across the counter without a calculator.
+ */
+async function seedDeliveryZones(db: Database): Promise<void> {
+  const existing = await db.maybeOne<{ c: number }>(
+    "SELECT COUNT(*) AS c FROM delivery_zones",
+  );
+  if (Number(existing?.c ?? 0) > 0) return;
+  // The list below is a deliberately complete Sydney coverage, so the store
+  // refuses addresses it cannot serve instead of quoting a distant suburb on a
+  // radius. An install that has not filled its zones in keeps the permissive
+  // default (0) and keeps selling.
+  await db.query(
+    "INSERT INTO settings (key, value) VALUES ('delivery_zones_strict','1') ON CONFLICT (key) DO UPDATE SET value = '1'",
+  );
+
+  const zones: [string, string, string, number, number, number, number, number, number][] = [
+    // name, suburbs, postcodes, base, per_km, min_order, free_over, eta, radius
+    [
+      "CBD & Inner City",
+      "Sydney, Haymarket, Ultimo, Chippendale, Surry Hills, Darlinghurst, Pyrmont, Woolloomooloo",
+      "2000,2008,2009,2010,2016,2017,2011",
+      299, 0, 2000, 6000, 25, 8,
+    ],
+    [
+      "Inner West & Eastern Suburbs",
+      "Newtown, Enmore, Marrickville, Leichhardt, Alexandria, Mascot, Randwick, Bondi, Ashfield, Burwood",
+      "2042,2043,2044,2045,2015,2020,2031,2032,2033,2034,2026,2024,2025,2023,2130,2131,2132,2133,2134,2135,2136,2137,2138,2037,2038,2039,2040",
+      399, 120, 2500, 7500, 35, 14,
+    ],
+    [
+      "Western Sydney",
+      "Parramatta, Auburn, Granville, Merrylands, Guildford, Blacktown, Strathfield",
+      "2140,2141,2142,2143,2144,2145,2146,2147,2148,2160,2161,2162,2163,2165,2166,2149,2139,2150,2151,2152,2153,2154,2155,2156,2157,2158,2159,2164,2167,2168,2170,2196,2200,2203,2204,2205,2206,2207,2208,2209,2210,2211,2212,2213,2214,2216,2217,2218,2219,2220,2221,2222,2223,2224,2226,2230,2231,2232,2233,2234,2176,2177,2178,2179,2747",
+      499, 150, 3000, 9000, 45, 30,
+    ],
+    [
+      "Mount Druitt & 2770",
+      "Mount Druitt, Willmot, Emerton, Whalan, Tregear, Blackett, Dharruk, Bidwill",
+      "2770",
+      699, 175, 3500, 12000, 55, 45,
+    ],
+  ];
+
+  for (const [index, zone] of zones.entries()) {
+    const [name, suburbs, postcodes, base, perKm, minOrder, freeOver, eta, radius] = zone;
+    await db.query(
+      `INSERT INTO delivery_zones (name, suburbs, postcodes, base_fee_cents, per_km_cents,
+         min_order_cents, free_over_cents, eta_minutes, max_radius_km, active, sort_order)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,TRUE,$10)`,
+      [name, suburbs, postcodes, base, perKm, minOrder, freeOver, eta, radius, index],
     );
   }
 }

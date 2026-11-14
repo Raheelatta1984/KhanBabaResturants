@@ -100,11 +100,19 @@ export async function POST(request: Request) {
       }
       case "check": {
         if (!isManager) return NextResponse.json({ error: "Managers only" }, { status: 403 });
+        const config = await whatsappConfig();
         const connection = await checkWhatsAppConnection();
         return NextResponse.json(
           {
             ok: connection.ok,
             connection,
+            // Which source each credential came from. This is the difference
+            // between "the token is wrong" and "Vercel is sending a different
+            // token than the one saved here" — two very different fixes.
+            sources: config.sources,
+            credentialMode: config.credentialMode,
+            mixedSources: config.mixedSources,
+            shadowed: config.shadowed,
             message: connection.ok
               ? `Connected as ${connection.verifiedName || "the business"} (${connection.displayPhoneNumber || "number hidden"}) — live mode.`
               : `Not connected: ${connection.error}${connection.hint ? ` — ${connection.hint}` : ""}`,
@@ -184,6 +192,9 @@ export async function POST(request: Request) {
             {
               ok: false,
               attempts,
+              credentialMode: config.credentialMode,
+              mixedSources: config.mixedSources,
+              shadowed: config.shadowed,
               result,
               error: `WhatsApp could not deliver to +${target}: ${result.error}${result.hint ? ` — ${result.hint}` : ""}`,
             },

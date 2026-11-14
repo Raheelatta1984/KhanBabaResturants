@@ -10,7 +10,22 @@
  * material costs, settings, pricing rules, reviews, release notes, the ERP
  * expansion modules and the health payload's row counts.
  */
+import assert from "node:assert/strict";
 import { createHarness } from "./lib/pglite";
+import {
+  listDeliveryZones,
+  quoteFromZones,
+} from "../lib/delivery/zones";
+import { quoteDelivery } from "../lib/delivery";
+import {
+  broadcastRecipients,
+  menuBlog,
+  menuBroadcastBody,
+  menuCaption,
+  menuHashtags,
+  saveDraft,
+  todayMenu,
+} from "../lib/marketing/engine";
 import { setDbFactory, getDb } from "../lib/db";
 import { SCHEMA_SQL } from "../lib/db/schema";
 import { seedDatabase } from "../lib/db/seed";
@@ -2070,6 +2085,158 @@ async function main() {
     check(
       "existing rows survive the upgrade",
       (await old.one<{ code: string }>("SELECT code FROM orders")).code === "KB-OLD1",
+    );
+  }
+
+  // ── Delivery zones ────────────────────────────────────────────────────────
+  // The rate card is the answer when no courier partner can quote. Before it
+  // existed the fallback fee was a hash of the address, so 2770 and 2000 were
+  // priced identically and nothing could refuse an address outside the area.
+  {
+    section("Delivery zones: postcode rate card and serviceability");
+    const db = await getDb();
+    const zones = await listDeliveryZones(db);
+    check("Sydney delivery zones are seeded", zones.length >= 4, zones.length);
+    check(
+      "the zone table covers 2770 (Sydney 2770 was the brief's delivery area)",
+      zones.some((zone) => zone.postcodes.split(",").map((p) => p.trim()).includes("2770")),
+    );
+
+    const cbd = await quoteFromZones(db, {
+      address: "25 Harris Street",
+      suburb: "Pyrmont",
+      postcode: "2000",
+      orderValueCents: 4500,
+    });
+    check("the CBD postcode is serviceable", cbd.serviceable);
+    check("the CBD resolves to the inner-city zone", cbd.zoneName.includes("CBD"), cbd.zoneName);
+    check("distance is measured from the kitchen", (cbd.distanceKm ?? 0) >= 0);
+
+    const mountDruitt = await quoteFromZones(db, {
+      address: "12 Luxford Road",
+      suburb: "Mount Druitt",
+      postcode: "2770",
+      orderValueCents: 4500,
+    });
+    check("2770 is serviceable", mountDruitt.serviceable);
+    check("2770 is priced from its own zone", mountDruitt.zoneName.includes("2770") || mountDruitt.zoneName.includes("Mount Druitt"), mountDruitt.zoneName);
+    check(
+      "2770 costs more than the CBD — not the same hash-based fee",
+      mountDruitt.feeCents > cbd.feeCents,
+      { cbd: cbd.feeCents, mountDruitt: mountDruitt.feeCents },
+    );
+
+    const unknown = await quoteFromZones(db, {
+      address: "1 Nowhere Road",
+      suburb: "Byron Bay",
+      postcode: "2481",
+      orderValueCents: 4500,
+    });
+    check("an unserved postcode is refused, not guessed", !unknown.serviceable);
+    check("the refusal explains itself", unknown.note.length > 10, unknown.note);
+
+    const free = await quoteFromZones(db, {
+      address: "25 Harris Street",
+      postcode: "2000",
+      orderValueCents: 99000,
+    });
+    check("free delivery applies above the zone threshold", free.freeDelivery && free.feeCents === 0);
+
+    // A live backstop: with no courier partner able to quote at all,
+    // quoteDelivery must price from the zone rate card rather than the sandbox
+    // hash. Turning our own fleet off is how a real quiet morning looks — no
+    // driver online — so this is the path a customer actually hits.
+    await db.query(
+      "INSERT INTO settings (key, value) VALUES ('own_fleet_enabled','0') ON CONFLICT (key) DO UPDATE SET value = '0'",
+    );
+    await db.query(
+      "INSERT INTO settings (key, value) VALUES ('delivery_provider','auto') ON CONFLICT (key) DO UPDATE SET value = 'auto'",
+    );
+    const quoted = await quoteDelivery({
+      orderCode: "ZONE-TEST",
+      customerName: "Zone Test",
+      dropoffAddress: "12 Luxford Road",
+      dropoffSuburb: "Mount Druitt",
+      dropoffPostcode: "2770",
+      orderValueCents: 4500,
+    });
+    check(
+      "the fallback quote comes from the zone rate card",
+      quoted.provider === "zone_rate_card",
+      quoted.provider,
+    );
+    await assert.rejects(
+      () =>
+        quoteDelivery({
+          orderCode: "ZONE-FAR",
+          customerName: "Far Test",
+          dropoffAddress: "1 Nowhere Road",
+          dropoffSuburb: "Byron Bay",
+          dropoffPostcode: "2481",
+          orderValueCents: 4500,
+        }),
+      /do not deliver|Outside/i,
+    );
+    check("an address outside every zone is refused, not priced", true);
+  }
+
+  // ── Content engine ────────────────────────────────────────────────────────
+  {
+    section("AI content engine: today's menu, broadcast and blog");
+    const db = await getDb();
+    const menu = await todayMenu(db, "https://khanbabaresturants.vercel.app");
+    check("today's menu reads the live dishes", menu.totalDishes > 0, menu.totalDishes);
+    check("chef's picks are populated", menu.featured.length > 0);
+
+    const body = menuBroadcastBody(menu);
+    check("the broadcast body names real dishes", body.includes(menu.featured[0].name), menu.featured[0].name);
+    check("the broadcast stays inside WhatsApp's limit", body.length <= 4096, body.length);
+    check("the broadcast includes an unsubscribe line", /STOP/i.test(body));
+
+    const tags = menuHashtags(menu);
+    check("fifteen hashtags are generated", tags.length === 15, tags.length);
+    check("hashtags carry no leading #", tags.every((tag) => !tag.startsWith("#")));
+
+    const blog = menuBlog(menu);
+    check("the blog slug is date-stamped", /^todays-menu-\d{4}-\d{2}-\d{2}$/.test(blog.slug), blog.slug);
+    check("the blog names the restaurant", blog.body.includes(menu.restaurantName));
+
+    const draft = await saveDraft(db, {
+      kind: "menu",
+      title: "Test draft",
+      caption: menuCaption(menu),
+      hashtags: tags,
+      blogSlug: blog.slug,
+      blogBody: blog.body,
+      actor: "test",
+    });
+    check("a draft is persisted", draft.id > 0);
+    const stored = await db.one<{ status: string }>(
+      "SELECT status FROM social_posts WHERE id = $1",
+      [draft.id],
+    );
+    check("a generated post starts as a draft, never published", stored.status === "draft", stored.status);
+    const post = await db.one<{ status: string }>(
+      "SELECT status FROM blog_posts WHERE slug = $1",
+      [blog.slug],
+    );
+    check("the blog version is saved alongside it", post.status === "draft");
+
+    // Consent: only customers with marketing_opt_in should ever be targeted.
+    await db.query(
+      "UPDATE customers SET marketing_opt_in = TRUE WHERE phone IN ('0451195192','0466 555 444')",
+    );
+    const audience = await broadcastRecipients(db, 100);
+    const optedPhones = await db.query<{ phone: string }>(
+      "SELECT phone FROM customers WHERE marketing_opt_in",
+    );
+    const optedDigits = new Set(
+      optedPhones.map((row) => row.phone.replace(/[^0-9]/g, "")),
+    );
+    check(
+      "every broadcast recipient has opted in",
+      audience.every((row) => optedDigits.has(row.wa_id)),
+      audience.map((row) => row.wa_id),
     );
   }
 

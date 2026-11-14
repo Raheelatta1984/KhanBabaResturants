@@ -123,6 +123,7 @@ export type OrderRow = {
   discount_cents: number;
   promotion_code: string | null;
   delivery_lat: number | null;
+  delivery_coords_verified: boolean;
   delivery_lng: number | null;
   status: OrderStatus;
   progress: number;
@@ -545,8 +546,8 @@ export async function createOrder(
         dropoffSuburb: input.suburb,
         dropoffPostcode: input.postcode,
         dropoffNotes: input.notes,
-        dropoffLat: deliveryLat,
-        dropoffLng: deliveryLng,
+        dropoffLat: coordinate(input.deliveryLat),
+        dropoffLng: coordinate(input.deliveryLng),
         orderValueCents: subtotal,
       });
     }
@@ -627,10 +628,10 @@ export async function createOrder(
         address, suburb, postcode, notes,
         subtotal_cents, surcharge_cents, surcharge_detail, priority, priority_fee_cents, delivery_fee_cents,
         delivery_cost_cents, total_cents, payment_method, payment_status, status, progress, promised_at,
-        delivery_lat, delivery_lng, discount_cents, promotion_code, payment_option,
-        source, whatsapp_wa_id, party_size)
+        delivery_lat, delivery_lng, delivery_coords_verified, discount_cents,
+        promotion_code, payment_option, source, whatsapp_wa_id, party_size)
        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22,
-        'pending_confirm', 5, $23, $24, $25, $26, $27, $28, $29, $30, $31)
+        'pending_confirm', 5, $23, $24, $25, $26, $27, $28, $29, $30, $31, $32)
        RETURNING id`,
       [
         code,
@@ -658,6 +659,7 @@ export async function createOrder(
         promisedAt,
         deliveryLat,
         deliveryLng,
+        Boolean(coordinate(input.deliveryLat) && coordinate(input.deliveryLng)),
         pricing.discountCents,
         promotionCheck?.promotion.code ?? null,
         paymentMethod === "online"
@@ -1111,8 +1113,11 @@ export async function refreshDeliveryQuote(
     dropoffAddress: order.address ?? "",
     dropoffSuburb: order.suburb ?? undefined,
     dropoffPostcode: order.postcode ?? undefined,
-    dropoffLat: order.delivery_lat,
-    dropoffLng: order.delivery_lng,
+    // Only a verified pin may influence the fee. An estimated one is stored for
+    // the map, but re-quoting must fall back to the zone rate card instead of
+    // pricing a made-up coordinate.
+    dropoffLat: order.delivery_coords_verified ? order.delivery_lat : null,
+    dropoffLng: order.delivery_coords_verified ? order.delivery_lng : null,
     orderValueCents: order.subtotal_cents,
   });
 
