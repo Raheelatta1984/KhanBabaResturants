@@ -15,6 +15,8 @@ export type StaffSession = {
   name: string;
   email: string;
   role: Role;
+  /** Fingerprint of the password this session was signed in with. */
+  pv?: string;
   exp: number;
 };
 
@@ -28,6 +30,7 @@ export async function createSessionToken(staff: {
   name: string;
   email: string;
   role: Role;
+  pv?: string;
 }): Promise<string> {
   return signToken({ ...staff, aud: AUDIENCE }, SESSION_TTL_SECONDS);
 }

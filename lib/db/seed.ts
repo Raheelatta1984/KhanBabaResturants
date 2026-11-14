@@ -1569,6 +1569,14 @@ async function seedWhatsNew(db: Database) {
       "0 minutes",
     ],
     [
+      "Users & access: roles, password resets and going live",
+      "Manage every login from the admin console, and retire the demo credentials in one step.",
+      "Staff & access is now Users & access. Edit a team member's name, sign-in email and role, reset a forgotten password with a generated one, disable or delete an account, and do the same for customer logins. Changes apply on the person's next click: a disabled account or a reset password signs them out straight away rather than when the cookie expires. Everyone can change their own password from the shield icon in the portal bar. Managers run the team but cannot create, edit or become administrators, and the last active administrator can never be removed. Before going live, 'Remove demo credentials' sets a real password on your account, disables every other account still on the demo password, removes the demo customer logins and stops the sign-in page printing them.",
+      "portal",
+      1,
+      "0 minutes",
+    ],
+    [
       "This release feed",
       "What's New is built into the site.",
       "Every pull request can add a note here. The feed is published from the admin console, and the scripts/whats-new.mjs helper drafts entries straight from your git history.",

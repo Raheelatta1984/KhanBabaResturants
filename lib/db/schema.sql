@@ -247,6 +247,14 @@ CREATE TABLE IF NOT EXISTS orders (
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+-- Upgrades for databases created by an earlier release. CREATE TABLE IF NOT
+-- EXISTS skips a table that is already there, so a column added later never
+-- reaches an existing database on its own. Every column added to an existing
+-- table after its first release must also be listed here, above any index that
+-- uses it. ADD COLUMN IF NOT EXISTS is a no-op once the column exists.
+ALTER TABLE orders ADD COLUMN IF NOT EXISTS customer_id INTEGER REFERENCES customers(id);
+ALTER TABLE orders ADD COLUMN IF NOT EXISTS tracking_token TEXT UNIQUE;
+
 CREATE INDEX IF NOT EXISTS idx_orders_status ON orders(status, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_orders_customer ON orders(customer_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_orders_channel ON orders(channel, created_at DESC);

@@ -152,7 +152,9 @@ export async function getCustomerSession(): Promise<CustomerSession | null> {
 export async function getCurrentCustomer(db: Db): Promise<CustomerRow | null> {
   const session = await getCustomerSession();
   if (!session) return null;
-  return getCustomerById(db, session.id);
+  const customer = await getCustomerById(db, session.id);
+  // A login the restaurant has disabled is treated as signed out.
+  return customer && customer.active ? customer : null;
 }
 
 /* ------------------------------------------------------------------ sign up */

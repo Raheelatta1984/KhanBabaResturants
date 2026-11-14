@@ -3,6 +3,8 @@ import Link from "next/link";
 import { redirect } from "next/navigation";
 import { getSession, homeForRole } from "@/lib/auth/session";
 import { LoginForm } from "@/components/portal/LoginForm";
+import { getDb } from "@/lib/db";
+import { demoLoginsEnabled } from "@/lib/auth/users";
 
 export const dynamic = "force-dynamic";
 
@@ -19,6 +21,15 @@ export default async function StaffLoginPage({
   const session = await getSession();
   const query = await searchParams;
   if (session && !query.next) redirect(homeForRole(session.role));
+
+  // Demo logins are advertised only until an administrator retires them. If
+  // the database cannot be asked, say nothing rather than print a password.
+  let demo = false;
+  try {
+    demo = await demoLoginsEnabled(await getDb());
+  } catch {
+    demo = false;
+  }
 
   return (
     <div className="login-page">
@@ -40,7 +51,7 @@ export default async function StaffLoginPage({
           </div>
         ) : null}
         <div style={{ marginTop: 22 }}>
-          <LoginForm nextPath={query.next} />
+          <LoginForm nextPath={query.next} demo={demo} />
         </div>
         <div style={{ marginTop: 18, textAlign: "center" }}>
           <Link href="/" className="tiny" style={{ color: "var(--muted-2)" }}>

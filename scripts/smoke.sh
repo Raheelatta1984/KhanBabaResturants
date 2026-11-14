@@ -2,6 +2,7 @@
 # Route smoke test: boots nothing, assumes a server is already listening on $BASE.
 # Logs in as the demo admin and checks that every page renders (HTTP 200) and the
 # key JSON endpoints answer. Run by CI after `npm run build && npm run start`.
+# It ends by retiring the demo credentials, so run it once against a fresh database.
 set -euo pipefail
 
 BASE="${BASE:-http://localhost:3000}"
@@ -147,6 +148,50 @@ echo "Admin JSON endpoints"
 check "/api/ops/upload" -b "$JAR"
 check "/api/ops/settings" -b "$JAR" -X POST -H 'content-type: application/json' \
   -d '{"values":{"restaurant_phone":"02 9000 1234"}}' 
+
+# Users & access over real HTTP: the cookie has to stop working the moment an
+# account is reset or disabled, and going live has to retire the demo logins.
+echo "Users & access"
+post() { # post <jar-flag> <jar> <path> <json>  → prints the status code
+  curl -s "$1" "$2" -o /dev/null -w "%{http_code}" -X POST "$BASE$3" -H 'content-type: application/json' -d "$4"
+}
+expect() { # expect <label> <want> <got>
+  if [ "$2" = "$3" ]; then echo "  ok   $1"; else echo "  FAIL $1 (wanted $2, got $3)"; fail=1; fi
+}
+check "/staff/password" -b "$JAR"
+if curl -s "$BASE/staff/login" | grep -q "Demo accounts"; then echo "  ok   demo logins listed before go-live"; else echo "  FAIL demo logins not listed before go-live"; fail=1; fi
+
+expect "create a kitchen login" 201 "$(post -b "$JAR" /api/ops/staff '{"action":"create","name":"Smoke Cook","email":"smoke-cook@khanbaba.com.au","role":"kitchen","password":"smoke-cook-pass-1"}')"
+expect "demo password refused for a new login" 400 "$(post -b "$JAR" /api/ops/staff '{"action":"create","name":"Lazy","email":"lazy@khanbaba.com.au","role":"kitchen","password":"KhanBaba2026!"}')"
+COOKJAR="$(mktemp)"
+expect "new login signs in" 200 "$(post -c "$COOKJAR" /api/staff/login '{"email":"smoke-cook@khanbaba.com.au","password":"smoke-cook-pass-1"}')"
+check "/kitchen" -b "$COOKJAR"
+expect "kitchen role cannot administer users" 401 "$(post -b "$COOKJAR" /api/ops/staff '{"action":"create","name":"X Y","email":"x@khanbaba.com.au","role":"admin","password":"whatever-pass-1"}')"
+COOK_ID=$(curl -s -b "$JAR" "$BASE/admin/staff" | grep -o 'smoke-cook@khanbaba.com.au' | head -1)
+expect "new login appears on Users & access" "smoke-cook@khanbaba.com.au" "$COOK_ID"
+
+expect "wrong current password refused" 403 "$(post -b "$COOKJAR" /api/staff/password '{"currentPassword":"nope","newPassword":"smoke-cook-pass-2"}')"
+OLDCOOK="$(mktemp)"; cp "$COOKJAR" "$OLDCOOK"
+code=$(curl -s -b "$COOKJAR" -c "$COOKJAR" -o /dev/null -w "%{http_code}" -X POST "$BASE/api/staff/password" -H 'content-type: application/json' \
+  -d '{"currentPassword":"smoke-cook-pass-1","newPassword":"smoke-cook-pass-2"}')
+expect "change own password" 200 "$code"
+check "/kitchen" -b "$COOKJAR"
+expect "the session from before the change is signed out" 401 "$(post -b "$OLDCOOK" /api/staff/password '{"currentPassword":"smoke-cook-pass-2","newPassword":"smoke-cook-pass-3"}')"
+code=$(curl -s -b "$OLDCOOK" -o /dev/null -w "%{http_code}" "$BASE/kitchen")
+expect "…and its pages redirect to sign-in" 307 "$code"
+
+expect "go-live needs a new admin password" 400 "$(post -b "$JAR" /api/ops/staff '{"action":"go_live"}')"
+code=$(curl -s -b "$JAR" -c "$JAR" -o /dev/null -w "%{http_code}" -X POST "$BASE/api/ops/staff" -H 'content-type: application/json' \
+  -d '{"action":"go_live","password":"smoke-owner-pass-1"}')
+expect "go-live" 200 "$code"
+check "/admin/staff" -b "$JAR"
+if curl -s "$BASE/staff/login" | grep -q "KhanBaba2026"; then echo "  FAIL sign-in page still prints the demo password"; fail=1; else echo "  ok   sign-in page no longer prints the demo password"; fi
+expect "demo admin password no longer works" 401 "$(post -c /dev/null /api/staff/login '{"email":"admin@khanbaba.com.au","password":"KhanBaba2026!"}')"
+expect "demo counter login is disabled" 401 "$(post -c /dev/null /api/staff/login '{"email":"counter@khanbaba.com.au","password":"KhanBaba2026!"}')"
+expect "demo customer login is gone" 401 "$(post -c /dev/null /api/customer/auth '{"mode":"signin","email":"ayesha@example.com","password":"KhanBaba2026!"}')"
+expect "admin signs in with the new password" 200 "$(post -c /dev/null /api/staff/login '{"email":"admin@khanbaba.com.au","password":"smoke-owner-pass-1"}')"
+check "/kitchen" -b "$COOKJAR"
+rm -f "$COOKJAR" "$OLDCOOK"
 
 rm -f "$JAR"
 if [ "$fail" = "1" ]; then

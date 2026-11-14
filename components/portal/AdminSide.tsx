@@ -35,7 +35,7 @@ const GROUPS: { title: string; links: { href: string; label: string }[] }[] = [
       { href: "/admin/pricing", label: "Pricing & holidays" },
       { href: "/admin/delivery", label: "Delivery & payments" },
       { href: "/admin/tables", label: "Tables & QR codes" },
-      { href: "/admin/staff", label: "Staff & access" },
+      { href: "/admin/staff", label: "Users & access" },
     ],
   },
 ];

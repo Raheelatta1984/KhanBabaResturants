@@ -79,6 +79,24 @@ import {
 } from "../lib/auth/customer";
 import { signToken, verifyToken } from "../lib/auth/token";
 import {
+  DEMO_PASSWORD,
+  UserAdminError,
+  changeOwnPassword,
+  createStaff,
+  deleteStaff,
+  demoLoginsEnabled,
+  demoStatus,
+  goLive,
+  liveStaffSession,
+  passwordFingerprint,
+  resetCustomerPassword,
+  resetStaffPassword,
+  setCustomerActive,
+  setStaffActive,
+  updateStaff,
+} from "../lib/auth/users";
+import type { StaffSession } from "../lib/auth/core";
+import {
   getOrderByTrackingToken,
   listCustomerOrders,
   resolveOrderRef,
@@ -1229,6 +1247,374 @@ async function main() {
     row.created_at === new Date(0).toISOString(),
   );
   check("insert() reads RETURNING id", (await fake.insert("INSERT ...")) === 7);
+
+
+  {
+    // ------------------------------------------------------------ user admin
+    section("Users & access (roles, password resets, going live)");
+    const staffRow = (email: string) =>
+      db.one<{
+        id: number;
+        name: string;
+        email: string;
+        role: StaffSession["role"];
+        active: boolean;
+        password_hash: string;
+      }>("SELECT * FROM staff WHERE email = $1", [email]);
+    const rejects = async (fn: () => Promise<unknown>, status?: number) => {
+      try {
+        await fn();
+        return false;
+      } catch (error) {
+        return (
+          error instanceof UserAdminError &&
+          (status === undefined || error.status === status)
+        );
+      }
+    };
+    const adminRow = await staffRow("admin@khanbaba.com.au");
+    const managerRow = await staffRow("manager@khanbaba.com.au");
+    const kitchenRow = await staffRow("kitchen@khanbaba.com.au");
+    const asAdmin = { id: adminRow.id, role: "admin" as const };
+    const asManager = { id: managerRow.id, role: "manager" as const };
+
+    const before = await demoStatus(db);
+    check("demo logins are advertised on a fresh database", before.enabled);
+    check(
+      "all five seeded staff are flagged as on the demo password",
+      before.staffIds.length === 5,
+      before.staffIds,
+    );
+    check("both demo customers are counted", before.customers === 2);
+
+    const newId = await createStaff(db, asAdmin, {
+      name: "Nadia Qureshi",
+      email: "Nadia@KhanBaba.com.au",
+      role: "counter",
+      password: "first-password-1",
+    });
+    const nadia = await staffRow("nadia@khanbaba.com.au");
+    check("staff created with a lowercased email", nadia.id === newId);
+    check(
+      "duplicate email rejected",
+      await rejects(
+        () =>
+          createStaff(db, asAdmin, {
+            name: "Other",
+            email: "nadia@khanbaba.com.au",
+            password: "first-password-1",
+          }),
+        409,
+      ),
+    );
+    check(
+      "the demo password cannot be chosen for a new account",
+      await rejects(() =>
+        createStaff(db, asAdmin, {
+          name: "Lazy",
+          email: "lazy@khanbaba.com.au",
+          password: DEMO_PASSWORD,
+        }),
+      ),
+    );
+    check(
+      "a manager cannot create an administrator",
+      await rejects(
+        () =>
+          createStaff(db, asManager, {
+            name: "Sneaky",
+            email: "sneaky@khanbaba.com.au",
+            role: "admin",
+            password: "first-password-1",
+          }),
+        403,
+      ),
+    );
+
+    await updateStaff(db, asManager, newId, { role: "kitchen", name: "Nadia Q" });
+    const promoted = await staffRow("nadia@khanbaba.com.au");
+    check(
+      "a manager can change a team member's role and name",
+      promoted.role === "kitchen" && promoted.name === "Nadia Q",
+    );
+    check(
+      "a manager cannot promote anyone to administrator",
+      await rejects(() => updateStaff(db, asManager, newId, { role: "admin" }), 403),
+    );
+    check(
+      "a manager cannot reset an administrator's password",
+      await rejects(
+        () => resetStaffPassword(db, asManager, adminRow.id, "takeover-pass-1"),
+        403,
+      ),
+    );
+    check(
+      "a manager cannot disable or delete an administrator",
+      (await rejects(() => setStaffActive(db, asManager, adminRow.id, false), 403)) &&
+        (await rejects(() => deleteStaff(db, asManager, adminRow.id), 403)),
+    );
+    check(
+      "nobody can change their own role",
+      await rejects(() => updateStaff(db, asAdmin, adminRow.id, { role: "manager" })),
+    );
+    check(
+      "nobody can disable or delete their own account",
+      (await rejects(() => setStaffActive(db, asAdmin, adminRow.id, false))) &&
+        (await rejects(() => deleteStaff(db, asAdmin, adminRow.id))),
+    );
+    check(
+      "email clash on edit rejected",
+      await rejects(
+        () => updateStaff(db, asAdmin, newId, { email: "kitchen@khanbaba.com.au" }),
+        409,
+      ),
+    );
+    check(
+      "unknown staff id is a 404",
+      await rejects(() => resetStaffPassword(db, asAdmin, 999999, "whatever-1"), 404),
+    );
+
+    // The last active administrator can never be removed, even by another one.
+    const secondAdminId = await createStaff(db, asAdmin, {
+      name: "Second Admin",
+      email: "second@khanbaba.com.au",
+      role: "admin",
+      password: "second-admin-1",
+    });
+    const asSecond = { id: secondAdminId, role: "admin" as const };
+    await setStaffActive(db, asAdmin, secondAdminId, false);
+    check(
+      "a disabled administrator does not count: the only active one cannot be demoted",
+      await rejects(() => updateStaff(db, asSecond, adminRow.id, { role: "manager" })),
+    );
+    check(
+      "…or disabled, or deleted",
+      (await rejects(() => setStaffActive(db, asSecond, adminRow.id, false))) &&
+        (await rejects(() => deleteStaff(db, asSecond, adminRow.id))),
+    );
+    await deleteStaff(db, asAdmin, secondAdminId);
+    check(
+      "a spare administrator account can be deleted",
+      (await db.maybeOne("SELECT id FROM staff WHERE id = $1", [secondAdminId])) === null,
+    );
+
+    // Sessions follow the database, not the 12-hour cookie.
+    const sessionFor = (row: Awaited<ReturnType<typeof staffRow>>): StaffSession => ({
+      id: row.id,
+      name: row.name,
+      email: row.email,
+      role: row.role,
+      pv: passwordFingerprint(row.password_hash),
+      exp: Math.floor(Date.now() / 1000) + 3600,
+    });
+    const kitchenSession = sessionFor(kitchenRow);
+    check(
+      "a live session resolves",
+      (await liveStaffSession(db, kitchenSession))?.role === "kitchen",
+    );
+    await updateStaff(db, asAdmin, kitchenRow.id, { role: "counter" });
+    check(
+      "a role change reaches an already-issued session",
+      (await liveStaffSession(db, kitchenSession))?.role === "counter",
+    );
+    await resetStaffPassword(db, asAdmin, kitchenRow.id, "kitchen-reset-1");
+    const kitchenAfter = await staffRow("kitchen@khanbaba.com.au");
+    check(
+      "reset password verifies and the old one does not",
+      verifyPassword("kitchen-reset-1", kitchenAfter.password_hash) &&
+        !verifyPassword(DEMO_PASSWORD, kitchenAfter.password_hash),
+    );
+    check(
+      "a password reset signs out the older session",
+      (await liveStaffSession(db, kitchenSession)) === null,
+    );
+    const freshKitchen = sessionFor(kitchenAfter);
+    await setStaffActive(db, asAdmin, kitchenRow.id, false);
+    check(
+      "disabling an account signs it out",
+      (await liveStaffSession(db, freshKitchen)) === null,
+    );
+    await setStaffActive(db, asAdmin, kitchenRow.id, true);
+    check(
+      "re-enabling restores it",
+      (await liveStaffSession(db, freshKitchen)) !== null,
+    );
+    check(
+      "a session without a fingerprint (issued before this release) still works",
+      (await liveStaffSession(db, { ...freshKitchen, pv: undefined })) !== null,
+    );
+
+    // Changing your own password needs the current one.
+    check(
+      "own password change rejects a wrong current password",
+      await rejects(
+        () => changeOwnPassword(db, kitchenRow.id, "wrong", "another-pass-1"),
+        403,
+      ),
+    );
+    const ownHash = await changeOwnPassword(
+      db,
+      kitchenRow.id,
+      "kitchen-reset-1",
+      "kitchen-own-pass-1",
+    );
+    check(
+      "own password change takes effect",
+      verifyPassword("kitchen-own-pass-1", ownHash) &&
+        (await staffRow("kitchen@khanbaba.com.au")).password_hash === ownHash,
+    );
+
+    // Customer logins.
+    const ayesha = (await getCustomerByEmail(db, "ayesha@example.com"))!;
+    await resetCustomerPassword(db, ayesha.id, "customer-reset-1", "Raheel Atta");
+    check(
+      "customer password reset lets them sign in with the new password",
+      (await signinCustomer(db, {
+        email: "ayesha@example.com",
+        password: "customer-reset-1",
+      })).customer.id === ayesha.id,
+    );
+    await setCustomerActive(db, ayesha.id, false, "Raheel Atta");
+    let disabledSignin = false;
+    try {
+      await signinCustomer(db, { email: "ayesha@example.com", password: "customer-reset-1" });
+    } catch {
+      disabledSignin = true;
+    }
+    check("a disabled customer login cannot sign in", disabledSignin);
+    const activity = await db.query<{ kind: string }>(
+      "SELECT kind FROM customer_activity WHERE customer_id = $1",
+      [ayesha.id],
+    );
+    check(
+      "staff actions are written to the customer's activity log",
+      activity.some((row) => row.kind === "password_reset") &&
+        activity.some((row) => row.kind === "account_disabled"),
+    );
+    check(
+      "unknown customer id is a 404",
+      await rejects(() => resetCustomerPassword(db, 999999, "whatever-12"), 404),
+    );
+
+    // Going live.
+    check(
+      "only an administrator can retire the demo credentials",
+      await rejects(() => goLive(db, asManager, "manager-new-1"), 403),
+    );
+    check(
+      "an administrator still on the demo password must choose a new one",
+      await rejects(() => goLive(db, asAdmin)),
+    );
+    check(
+      "…and it cannot be the demo password again",
+      await rejects(() => goLive(db, asAdmin, DEMO_PASSWORD)),
+    );
+    check(
+      "a refused go-live changed nothing",
+      (await demoLoginsEnabled(db)) && (await demoStatus(db)).customers === 2,
+    );
+    const demoOrdersBefore = await count(db, "orders");
+    const live = await goLive(db, asAdmin, "owner-real-pass-1");
+    const after = await demoStatus(db);
+    const adminAfter = await staffRow("admin@khanbaba.com.au");
+    check(
+      "go-live sets the administrator's new password",
+      live.passwordHash === adminAfter.password_hash &&
+        verifyPassword("owner-real-pass-1", adminAfter.password_hash),
+    );
+    check(
+      "go-live disables the other accounts still on the demo password (manager, counter, delivery)",
+      live.disabledStaff === 3,
+      live.disabledStaff,
+    );
+    const stillActive = await db.query<{ email: string }>(
+      "SELECT email FROM staff WHERE active = TRUE ORDER BY email",
+    );
+    check(
+      "accounts with their own password stay active",
+      stillActive.map((row) => row.email).join(",") ===
+        "admin@khanbaba.com.au,kitchen@khanbaba.com.au,nadia@khanbaba.com.au",
+      stillActive,
+    );
+    check("go-live removes the demo customers", live.removedCustomers === 2 && after.customers === 0);
+    check("…but keeps their orders", (await count(db, "orders")) === demoOrdersBefore);
+    check("the sign-in page stops advertising demo logins", !after.enabled);
+    check(
+      "no active account is left on the demo password",
+      (
+        await db.query<{ password_hash: string }>(
+          "SELECT password_hash FROM staff WHERE active = TRUE",
+        )
+      ).every((row) => !verifyPassword(DEMO_PASSWORD, row.password_hash)),
+    );
+    check(
+      "a disabled demo account cannot be re-enabled until its password is reset",
+      await rejects(() => setStaffActive(db, asAdmin, managerRow.id, true)),
+    );
+    await resetStaffPassword(db, asAdmin, managerRow.id, "manager-real-1");
+    await setStaffActive(db, asAdmin, managerRow.id, true);
+    check(
+      "…and can be once it has a real password",
+      (await staffRow("manager@khanbaba.com.au")).active,
+    );
+    const again = await goLive(db, asAdmin);
+    check(
+      "go-live is safe to run twice",
+      again.disabledStaff === 0 && again.removedCustomers === 0 && again.passwordHash === null,
+    );
+
+    // ------------------------------------------------- upgrading an old database
+    section("Upgrading a database created by an earlier release");
+    const old = (await createHarness()).db;
+    // The orders table exactly as it shipped before customer accounts existed.
+    const legacyOrders = SCHEMA_SQL.slice(
+      SCHEMA_SQL.indexOf("CREATE TABLE IF NOT EXISTS orders ("),
+      SCHEMA_SQL.indexOf("CREATE INDEX IF NOT EXISTS idx_orders_status"),
+    )
+      .split("\n")
+      .filter(
+        (line) =>
+          !line.includes("customer_id INTEGER") &&
+          !line.includes("tracking_token TEXT") &&
+          !line.startsWith("ALTER TABLE") &&
+          !line.startsWith("--"),
+      )
+      .join("\n");
+    await old.exec(
+      "CREATE TABLE dining_tables (id INTEGER GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY, code TEXT NOT NULL UNIQUE, name TEXT NOT NULL, zone TEXT, seats INTEGER NOT NULL DEFAULT 4, active BOOLEAN NOT NULL DEFAULT TRUE);",
+    );
+    await old.exec(legacyOrders);
+    await old.query(
+      "INSERT INTO orders (code, channel, customer_name, payment_method) VALUES ('KB-OLD1', 'pickup', 'Before Accounts', 'counter')",
+    );
+    const legacyColumns = async () =>
+      (
+        await old.query<{ column_name: string }>(
+          "SELECT column_name FROM information_schema.columns WHERE table_name = 'orders'",
+        )
+      ).map((row) => row.column_name);
+    check(
+      "the legacy orders table really lacks the new columns",
+      !(await legacyColumns()).includes("tracking_token"),
+    );
+    let upgradeError: unknown = null;
+    try {
+      await old.exec(SCHEMA_SQL);
+      await old.exec(SCHEMA_SQL);
+    } catch (error) {
+      upgradeError = error;
+    }
+    check("the schema applies over an older database", upgradeError === null, upgradeError);
+    const upgraded = await legacyColumns();
+    check(
+      "missing columns were added to the existing table",
+      upgraded.includes("customer_id") && upgraded.includes("tracking_token"),
+    );
+    check(
+      "existing rows survive the upgrade",
+      (await old.one<{ code: string }>("SELECT code FROM orders")).code === "KB-OLD1",
+    );
+  }
 
   await harness.close();
 
