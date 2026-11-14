@@ -448,3 +448,22 @@ export function createSqlFromClient(client: {
     },
   };
 }
+// Add driver_credentials table creation to seed or migration
+// Note: This is a placeholder for the actual migration/seed logic
+// In a real app, we would add a migration file. Here we ensure the table exists in the schema.
+
+// Ensure driver_credentials table exists
+export async function ensureDriverCredentialsTable(db: any) {
+  await db.query(`
+    CREATE TABLE IF NOT EXISTS driver_credentials (
+      id SERIAL PRIMARY KEY,
+      driver_id INTEGER REFERENCES drivers(id) ON DELETE CASCADE,
+      email VARCHAR(255) UNIQUE NOT NULL,
+      password_hash VARCHAR(255) NOT NULL,
+      online BOOLEAN DEFAULT FALSE,
+      last_online_at TIMESTAMP WITH TIME ZONE,
+      created_at TIMESTAMP WITH TIME ZONE DEFAULT now(),
+      updated_at TIMESTAMP WITH TIME ZONE DEFAULT now()
+    )
+  `);
+}

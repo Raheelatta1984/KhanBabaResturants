@@ -37,14 +37,18 @@ export default async function IntegrationsPage() {
   ] = await Promise.all([
     getSettings(),
     squareStatus(db),
-    db.query<{
-      id: number; direction: string; entity: string; entity_ref: string | null;
-      external_id: string | null; status: string; message: string | null; created_at: string;
-    }>("SELECT * FROM square_sync_records ORDER BY id DESC LIMIT 25"),
-    db.query<{
-      id: number; external_id: string; kind: string; source: string; order_code: string | null;
-      amount_cents: number; currency: string; status: string | null; occurred_at: string | null;
-    }>("SELECT * FROM square_transactions ORDER BY id DESC LIMIT 25"),
+    db.query<
+      {
+        id: number; direction: string; entity: string; entity_ref: string | null;
+        external_id: string | null; status: string; message: string | null; created_at: string;
+      }
+    >("SELECT * FROM square_sync_records ORDER BY id DESC LIMIT 25"),
+    db.query<
+      {
+        id: number; external_id: string; kind: string; source: string; order_code: string | null;
+        amount_cents: number; currency: string; status: string | null; occurred_at: string | null;
+      }
+    >("SELECT * FROM square_transactions ORDER BY id DESC LIMIT 25"),
     configuredProviders(db),
     uberConfigured(db),
     doordashConfigured(db),
@@ -66,9 +70,14 @@ export default async function IntegrationsPage() {
             the ordering core never depends on it.
           </p>
         </div>
-        <Link href="/admin/delivery" className="btn btn-outline btn-sm">
-          Delivery &amp; payment settings
-        </Link>
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+          <Link href="/admin/delivery" className="btn btn-outline btn-sm">
+            Delivery &amp; payment settings
+          </Link>
+          <Link href="/admin/marketing" className="btn btn-outline btn-sm">
+            Marketing &amp; social media
+          </Link>
+        </div>
       </div>
 
       <section className="panel">
@@ -101,7 +110,8 @@ export default async function IntegrationsPage() {
           {partners.length ? partners.map(providerLabel).join(", ") : "the sandbox courier"}.
           Webhooks: <code>/api/webhooks/uber</code>, <code>/api/webhooks/doordash</code>,{" "}
           <code>/api/webhooks/stripe</code>, <code>/api/webhooks/paypal</code>,{" "}
-          <code>/api/webhooks/square</code>, <code>/api/webhooks/facebook</code>.
+          <code>/api/webhooks/square</code>, <code>/api/webhooks/facebook</code>,{" "}
+          <code>/api/webhooks/instagram</code>.
         </div>
       </section>
 
@@ -167,49 +177,6 @@ export default async function IntegrationsPage() {
             },
           ]}
         />
-      </div>
-
-      <div className="grid grid-2" style={{ marginTop: 18 }}>
-        <section className="panel">
-          <div className="panel-head"><h3>Sync log</h3></div>
-          <div className="table-wrap">
-            <table className="data-table">
-              <thead><tr><th>When</th><th>Direction</th><th>Entity</th><th>Status</th><th>Detail</th></tr></thead>
-              <tbody>
-                {records.length === 0 ? <tr><td colSpan={5} className="muted">No sync activity yet — run a sync above.</td></tr> : null}
-                {records.map((record) => (
-                  <tr key={record.id}>
-                    <td className="tiny muted">{formatDateTime(record.created_at)}</td>
-                    <td className="tiny">{record.direction}</td>
-                    <td className="tiny">{record.entity_ref ?? record.entity}</td>
-                    <td><span className={`badge ${record.status === "ok" ? "badge-green" : record.status === "error" ? "badge-red" : "badge-muted"}`}>{record.status}</span></td>
-                    <td className="tiny muted">{record.message ?? record.external_id ?? "—"}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </section>
-        <section className="panel">
-          <div className="panel-head"><h3>POS transaction mirror</h3></div>
-          <div className="table-wrap">
-            <table className="data-table">
-              <thead><tr><th>External ID</th><th>Order</th><th>Kind</th><th>Amount</th><th>Status</th></tr></thead>
-              <tbody>
-                {transactions.length === 0 ? <tr><td colSpan={5} className="muted">No transactions mirrored yet.</td></tr> : null}
-                {transactions.map((transaction) => (
-                  <tr key={transaction.id}>
-                    <td className="tiny mono">{transaction.external_id.slice(0, 20)}</td>
-                    <td className="tiny">{transaction.order_code ?? "—"}</td>
-                    <td className="tiny">{transaction.kind}</td>
-                    <td>{money(transaction.amount_cents)}</td>
-                    <td className="tiny">{transaction.status ?? "—"}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </section>
       </div>
     </>
   );

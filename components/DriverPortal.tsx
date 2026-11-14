@@ -22,6 +22,13 @@ export type DriverPortalData = {
     postcode: string | null;
     status: string;
     tracking: DeliveryMapData;
+    // Summary info for driver portal
+    summary: {
+      amount: string;
+      location: { address: string | null; suburb: string | null; postcode: string | null; lat: number | null; lng: number | null };
+      totalKm: number;
+      estimatedTimeMinutes: number;
+    };
   } | null;
   ledger: {
     id: number;
@@ -40,6 +47,10 @@ export type DriverPortalData = {
     financial_year: string;
     ended_at: string | null;
   }[];
+  // New driver credential settings
+  credentialId?: number;
+  soundNotification?: boolean;
+  trackingIntervalKm?: number;
 };
 
 export function DriverPortal({ initial }: { initial: DriverPortalData }) {
@@ -50,19 +61,65 @@ export function DriverPortal({ initial }: { initial: DriverPortalData }) {
     initial.job?.status === "delivered",
   );
   const [fee, setFee] = useState<number | null>(null);
+  const [soundNotification, setSoundNotification] = useState(initial.soundNotification ?? true);
+  const [trackingIntervalKm, setTrackingIntervalKm] = useState(initial.trackingIntervalKm ?? 0.05);
   const watchId = useRef<number | null>(null);
   const lastSent = useRef(0);
+  const lastKm = useRef(0);
+  const audioRef = useRef<HTMLAudioElement | null>(null);
+
+  // Play sound notification for order acceptance
+  function playAcceptanceSound() {
+    if (soundNotification) {
+      if (audioRef.current) {
+        audioRef.current.play().catch(() => {});
+      } else {
+        // Fallback to browser audio notification
+        const audio = new Audio("/sounds/order-accepted.mp3");
+        audio.play().catch(() => {});
+      }
+    }
+  }
+
+  // Calculate distance in km between two lat/lng points (Haversine)
+  function calculateDistanceKm(lat1: number, lng1: number, lat2: number, lng2: number) {
+    const R = 6371; // Earth radius in km
+    const dLat = (lat2 - lat1) * (Math.PI / 180);
+    const dLng = (lng2 - lng1) * (Math.PI / 180);
+    const a =
+      Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+      Math.cos((lat1 * Math.PI) / 180) *
+        Math.cos((lat2 * Math.PI) / 180) *
+        Math.sin(dLng / 2) *
+        Math.sin(dLng / 2);
+    const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+    return R * c;
+  }
 
   async function ping(position: GeolocationPosition) {
     const now = Date.now();
-    if (now - lastSent.current < initial.intervalSeconds * 1000) return;
-    lastSent.current = now;
+    // Calculate distance since last ping
+    const currentLat = position.coords.latitude;
+    const currentLng = position.coords.longitude;
+    const lastLat = lastSent.current > 0 ? (lastSent.current as any).lat : currentLat;
+    const lastLng = lastSent.current > 0 ? (lastSent.current as any).lng : currentLng;
+    const distanceKm = calculateDistanceKm(lastLat, lastLng, currentLat, currentLng);
+
+    // Configurable interval: 0.05 km (default)
+    if (lastSent.current > 0 && distanceKm < trackingIntervalKm && now - lastSent.current.timestamp < initial.intervalSeconds * 1000) {
+      return;
+    }
+
+    lastSent.current = { lat: currentLat, lng: currentLng, timestamp: now };
+    lastKm.current += distanceKm;
+
     try {
-      const res = await fetch("/api/driver/location", {
+      const res = await fetch("/api/driver/order/track", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          token: initial.token,
+          credentialId: initial.credentialId,
+          jobId: initial.job?.id,
           lat: position.coords.latitude,
           lng: position.coords.longitude,
           accuracyM: position.coords.accuracy,
@@ -73,7 +130,8 @@ export function DriverPortal({ initial }: { initial: DriverPortalData }) {
         }),
       });
       if (!res.ok) throw new Error("ping rejected");
-      setStatus(`Location shared at ${new Date().toLocaleTimeString("en-AU")}`);
+      const data = await res.json();
+      setStatus(`Location shared at ${new Date().toLocaleTimeString("en-AU")} · ${data.tracking?.distanceKm?.toFixed(2) ?? lastKm.current.toFixed(2)} km`);
     } catch {
       setStatus("Could not share location — check your connection");
     }
@@ -101,16 +159,42 @@ export function DriverPortal({ initial }: { initial: DriverPortalData }) {
       watchId.current = null;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [sharing]);
+  }, [sharing, trackingIntervalKm]);
+
+  async function acceptOrder() {
+    if (!initial.job) return;
+    setDelivering(true);
+    try {
+      const res = await fetch("/api/driver/order/accept", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ credentialId: initial.credentialId, jobId: initial.job.id }),
+      });
+      const data = (await res.json()) as { error?: string; summary?: any; soundNotification?: boolean };
+      if (!res.ok) throw new Error(data.error ?? "Could not accept order");
+      
+      // Play sound notification
+      if (data.soundNotification !== false) {
+        playAcceptanceSound();
+      }
+
+      // Refresh job status
+      window.location.reload();
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : "Could not accept order");
+    } finally {
+      setDelivering(false);
+    }
+  }
 
   async function markDelivered() {
     if (!initial.job) return;
     setDelivering(true);
     try {
-      const res = await fetch("/api/driver/deliver", {
+      const res = await fetch("/api/driver/order/deliver", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ token: initial.token, jobId: initial.job.id }),
+        body: JSON.stringify({ credentialId: initial.credentialId, jobId: initial.job.id }),
       });
       const data = (await res.json()) as { error?: string; driverFeeCents?: number };
       if (!res.ok) throw new Error(data.error ?? "Could not mark delivered");
@@ -123,8 +207,32 @@ export function DriverPortal({ initial }: { initial: DriverPortalData }) {
     }
   }
 
+  async function markUnsuccessful() {
+    if (!initial.job) return;
+    setDelivering(true);
+    try {
+      const res = await fetch("/api/driver/order/unsuccessful", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ credentialId: initial.credentialId, jobId: initial.job.id, reason: "Unsuccessful delivery" }),
+      });
+      const data = (await res.json()) as { error?: string };
+      if (!res.ok) throw new Error(data.error ?? "Could not mark unsuccessful");
+      setStatus("Tracking continued until return to restaurant");
+      // Refresh job status
+      window.location.reload();
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : "Could not mark unsuccessful");
+    } finally {
+      setDelivering(false);
+    }
+  }
+
   return (
     <div className="driver-portal">
+      {/* Sound notification audio element */}
+      <audio ref={audioRef} src="/sounds/order-accepted.mp3" preload="auto" />
+
       <div className="grid grid-3" style={{ marginBottom: 18 }}>
         <div className="stat-card">
           <span>Commission rate</span>
@@ -151,21 +259,51 @@ export function DriverPortal({ initial }: { initial: DriverPortalData }) {
               {completed ? "Delivered" : initial.job.status.replace(/_/g, " ")}
             </span>
           </div>
-          <p className="small muted" style={{ marginBottom: 12 }}>
-            {[initial.job.address, initial.job.suburb, initial.job.postcode]
-              .filter(Boolean)
-              .join(", ")}
-          </p>
+          
+          {/* Summary Info: amount, suburb/street, total KM, total ETA */}
+          <div className="summary-info" style={{ marginBottom: 12, padding: 12, background: "var(--bg-muted)", borderRadius: 6 }}>
+            <div className="grid grid-3" style={{ gap: 12 }}>
+              <div>
+                <span className="small muted">Delivery amount</span>
+                <b style={{ display: "block", fontSize: "1.1rem" }}>{initial.job.summary.amount}</b>
+              </div>
+              <div>
+                <span className="small muted">Location</span>
+                <b style={{ display: "block", fontSize: "1.1rem" }}>
+                  {initial.job.summary.location.address}, {initial.job.summary.location.suburb}, {initial.job.summary.location.postcode}
+                </b>
+              </div>
+              <div>
+                <span className="small muted">Total KM / ETA</span>
+                <b style={{ display: "block", fontSize: "1.1rem" }}>
+                  {initial.job.summary.totalKm.toFixed(2)} km / {initial.job.summary.estimatedTimeMinutes} min
+                </b>
+              </div>
+            </div>
+          </div>
+
           <DeliveryMap
             data={initial.job.tracking}
             title="Your route"
-            refreshUrl={`/api/driver/location?token=${encodeURIComponent(initial.token)}`}
+            refreshUrl={`/api/driver/order/track?credentialId=${initial.credentialId}&jobId=${initial.job.id}`}
           />
           <div className="row" style={{ marginTop: 14, gap: 10, flexWrap: "wrap" }}>
+            {!completed && initial.job.status === "requested" && (
+              <button
+                type="button"
+                className="btn btn-primary"
+                onClick={acceptOrder}
+                disabled={delivering}
+              >
+                <Icon name="check" size={14} />{" "}
+                Accept order
+              </button>
+            )}
             <button
               type="button"
               className={`btn ${sharing ? "btn-outline" : "btn-primary"}`}
               onClick={() => setSharing((value) => !value)}
+              disabled={completed}
             >
               <Icon name="pin" size={14} />{" "}
               {sharing ? "Stop sharing location" : "Share my live location"}
@@ -178,6 +316,15 @@ export function DriverPortal({ initial }: { initial: DriverPortalData }) {
             >
               <Icon name="check" size={14} />{" "}
               {completed ? "Delivered — commission posted" : "Mark delivered"}
+            </button>
+            <button
+              type="button"
+              className="btn btn-danger"
+              onClick={markUnsuccessful}
+              disabled={delivering || completed}
+            >
+              <Icon name="alert" size={14} />{" "}
+              Unsuccessful (return to restaurant)
             </button>
             <span className="tiny muted">{status}</span>
           </div>
@@ -223,7 +370,7 @@ export function DriverPortal({ initial }: { initial: DriverPortalData }) {
             <h3>ATO kilometre history</h3>
             <a
               className="btn btn-outline btn-sm"
-              href={`/api/driver/ato-report?token=${encodeURIComponent(initial.token)}&fy=${initial.fy}`}
+              href={`/api/driver/ato-report?credentialId=${initial.credentialId}&fy=${initial.fy}`}
             >
               Download CSV
             </a>
