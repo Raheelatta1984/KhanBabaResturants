@@ -262,10 +262,11 @@ export async function logVerification(
   action: string,
   detail: string,
   actor: string,
+  documentId?: number,
 ): Promise<void> {
   await db.query(
-    "INSERT INTO driver_verification_events (driver_id, action, detail, actor) VALUES ($1,$2,$3,$4)",
-    [driverId, action, detail, actor],
+    "INSERT INTO driver_verification_events (driver_id, action, detail, actor, document_id) VALUES ($1,$2,$3,$4,$5)",
+    [driverId, action, detail, actor, documentId || null],
   );
 }
 
@@ -349,6 +350,7 @@ export async function verifyDriverDocument(
       notes ? ` — ${notes}` : ""
     }`,
     actor,
+    documentId,
   );
   await db.query(
     `UPDATE drivers SET status = 'under_review', updated_at = now()
@@ -490,18 +492,34 @@ export async function recordDriverPing(
     heading?: number;
     speedKmh?: number;
     orderCode?: string;
+    jobId?: number; // Optional for credential-based tracking
   },
 ): Promise<{ jobId: number | null; orderId: number | null }> {
   const lat = Number(input.lat);
   const lng = Number(input.lng);
   if (!Number.isFinite(lat) || !Number.isFinite(lng) || Math.abs(lat) > 90 || Math.abs(lng) > 180)
     throw new DriverError("Invalid GPS coordinates");
-  const job = await db.maybeOne<{ id: number; order_id: number }>(
-    `SELECT j.id, j.order_id FROM delivery_jobs j
-      WHERE j.driver_id = $1 AND j.status IN ('requested','accepted','pickup','dropoff')
-      ORDER BY j.id DESC LIMIT 1`,
-    [driverId],
-  );
+  
+  // If jobId is provided (credential-based), use it; otherwise find the active job
+  let job: { id: number; order_id: number; status: string } | null = null;
+  if (input.jobId) {
+    job = await db.maybeOne<{ id: number; order_id: number; status: string }>(
+      `SELECT id, order_id, status FROM delivery_jobs WHERE id = $1`,
+      [input.jobId],
+    );
+  } else {
+    job = await db.maybeOne<{ id: number; order_id: number; status: string }>(
+      `SELECT j.id, j.order_id, j.status FROM delivery_jobs j
+        WHERE j.driver_id = $1 AND j.status IN ('requested','accepted','pickup','dropoff','returning')
+        ORDER BY j.id DESC LIMIT 1`,
+      [driverId],
+    );
+  }
+
+  // Unsuccessful delivery tracking: if status is 'returning', continue tracking until returned to restaurant
+  // The status will be updated to 'delivered' or 'failed' when the driver returns to restaurant
+  // (handled by the client or a separate endpoint)
+
   await db.query(
     `INSERT INTO driver_location_pings (driver_id, order_id, job_id, lat, lng,
       accuracy_m, heading, speed_kmh, source)
@@ -725,7 +743,7 @@ export async function driverAtoReport(
 export function atoReportCsv(report: Awaited<ReturnType<typeof driverAtoReport>>): string {
   const esc = (value: unknown) => {
     const text = value == null ? "" : String(value);
-    return /[",\n]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text;
+    return /["\n]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text;
   };
   const header = [
     "Date",
