@@ -152,7 +152,7 @@ export async function publishFacebookMarketingPost(
   post: MarketingPost,
 ): Promise<{ postId: string; url: string }> {
   const { facebookConfig, publishOfferPost, postMessage } = await import(
-    "../facebook"
+    "../integrations/facebook"
   );
   const config = await facebookConfig();
   if (!config.pageId || !config.accessToken)
@@ -161,7 +161,7 @@ export async function publishFacebookMarketingPost(
   // Adapt marketing post to Facebook format
   const fbMessage = formatMarketingPost(post);
   const json = await (
-    await import("../facebook")
+    await import("../integrations/facebook")
   ).graph(`/${config.pageId}/feed`, config, {
     method: "POST",
     body: JSON.stringify({ message: fbMessage }),
