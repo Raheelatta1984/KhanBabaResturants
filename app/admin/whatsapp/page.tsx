@@ -7,6 +7,7 @@ import { formatDateTime } from "@/lib/time";
 import {
   whatsappConfig,
   whatsappChatLink,
+  whatsappErrorHint,
   prettyPhone,
 } from "@/lib/whatsapp/client";
 import {
@@ -53,6 +54,7 @@ export default async function AdminWhatsAppPage() {
       db.query<{
         id: number; direction: string; wa_id: string; kind: string; body: string | null;
         status: string; created_at: string; order_id: number | null;
+        error: string | null; payload: string | null;
       }>("SELECT * FROM whatsapp_messages ORDER BY id DESC LIMIT 30"),
       db.query<{
         id: number; code: string; customer_name: string; phone: string | null;
@@ -63,6 +65,36 @@ export default async function AdminWhatsAppPage() {
       ),
       getBaseUrl(),
     ]);
+
+  // The last message we actually tried to deliver (catalogue rows are local
+  // bookkeeping, not sends). If it failed, the failure belongs at the top of the
+  // page — the log used to record Meta's error without ever showing it, which
+  // made a rejected message look like a message that was simply ignored.
+  const lastAttempt = await db.maybeOne<{
+    id: number; wa_id: string; status: string; error: string | null;
+    payload: string | null; created_at: string;
+  }>(
+    `SELECT id, wa_id, status, error, payload, created_at FROM whatsapp_messages
+      WHERE direction = 'outbound' AND kind IN ('text','template','cta')
+      ORDER BY id DESC LIMIT 1`,
+  );
+  const lastAttemptCode = (() => {
+    try {
+      const payload = JSON.parse(lastAttempt?.payload ?? "{}") as {
+        error?: { code?: number };
+      };
+      return payload.error?.code;
+    } catch {
+      return undefined;
+    }
+  })();
+  const deliveryFailure =
+    lastAttempt && lastAttempt.status === "failed"
+      ? {
+          ...lastAttempt,
+          hint: whatsappErrorHint(lastAttemptCode),
+        }
+      : null;
 
   const publicNumber = settingValue(settings, "whatsapp_display_number", "");
   const chatLink = whatsappChatLink(
@@ -143,6 +175,30 @@ export default async function AdminWhatsAppPage() {
           </Link>
         </div>
       </div>
+
+      {deliveryFailure ? (
+        <div
+          className="notice"
+          style={{
+            borderColor: "rgba(255,122,107,0.45)",
+            alignItems: "flex-start",
+            marginBottom: 18,
+          }}
+        >
+          <span>
+            <strong style={{ color: "var(--red)" }}>
+              The last WhatsApp message did not send.
+            </strong>{" "}
+            {prettyPhone(deliveryFailure.wa_id)} · {formatDateTime(deliveryFailure.created_at)} ·{" "}
+            <span className="mono">{deliveryFailure.error || "no error recorded"}</span>
+            {deliveryFailure.hint ? <> — {deliveryFailure.hint}</> : null}{" "}
+            <span className="tiny muted">
+              Meta accepted nothing, so nothing arrived on that phone. Fix the cause above, then use{" "}
+              <strong>Check connection</strong> and <strong>Send a real WhatsApp test</strong> below.
+            </span>
+          </span>
+        </div>
+      ) : null}
 
       <div className="grid grid-3">
         <div className="stat-card">
@@ -528,6 +584,11 @@ export default async function AdminWhatsAppPage() {
                 <p className="small" style={{ whiteSpace: "pre-wrap", marginTop: 4 }}>
                   {message.body}
                 </p>
+                {message.status === "failed" ? (
+                  <div className="tiny" style={{ color: "var(--red)", marginTop: 4 }}>
+                    Not delivered — {message.error || "no error recorded"}
+                  </div>
+                ) : null}
               </article>
             ))}
           </div>
