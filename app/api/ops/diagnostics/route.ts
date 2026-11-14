@@ -7,6 +7,7 @@ import {
   CONFIG_FIELDS,
   checkWhatsAppConnection,
   credentialMode,
+  discoverWhatsAppCatalog,
   maskSecret,
   whatsappConfig,
 } from "@/lib/whatsapp/client";
@@ -38,6 +39,7 @@ export async function GET(request: Request) {
 
   const url = new URL(request.url);
   const probe = url.searchParams.get("probe") === "1";
+  const findCatalog = url.searchParams.get("catalog") === "1";
   const config = await whatsappConfig();
   const settings = await getSettings();
   const db = await getDb();
@@ -75,6 +77,7 @@ export async function GET(request: Request) {
   // Only probe Meta when asked: a live check costs a Graph call and should not
   // run every time somebody opens a page.
   const connection = probe ? await checkWhatsAppConnection() : null;
+  const catalog = findCatalog ? await discoverWhatsAppCatalog() : null;
 
   const problems: string[] = [];
   if (!config.configured) {
@@ -96,7 +99,7 @@ export async function GET(request: Request) {
   }
   if (!config.catalogId) {
     problems.push(
-      "No WhatsApp catalogue id — dishes cannot be published to the catalogue yet (menu ordering in chat still works).",
+      "No WhatsApp catalogue id — dishes cannot be published to the catalogue yet (menu ordering in chat still works). Use “Find my catalog” to read it from Meta.",
     );
   }
   if (connection && !connection.ok) {
@@ -129,6 +132,7 @@ export async function GET(request: Request) {
     credentials,
     lastFailure,
     connection,
+    catalog,
     deliveryZones: {
       count: zones.zones.length,
       postcodes: zones.postcodes,
@@ -171,9 +175,9 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "Not authorised" }, { status: 401 });
   }
 
-  let body: { action?: string; mode?: string };
+  let body: { action?: string; mode?: string; catalogId?: string };
   try {
-    body = (await request.json()) as { action?: string; mode?: string };
+    body = (await request.json()) as { action?: string; mode?: string; catalogId?: string };
   } catch {
     return NextResponse.json({ error: "Invalid request" }, { status: 400 });
   }
@@ -196,6 +200,21 @@ export async function POST(request: Request) {
           : mode === "env"
             ? "Vercel's environment variables now win over the values saved in the portal."
             : "Automatic: a Vercel variable wins when one is set, otherwise the portal value is used.",
+    });
+  }
+
+  if (body.action === "set-catalog-id") {
+    const catalogId = (body.catalogId ?? "").replace(/[^0-9]/g, "");
+    if (!catalogId) {
+      return NextResponse.json({ error: "A numeric catalog id is required" }, { status: 400 });
+    }
+    await setSetting("whatsapp_catalog_id", catalogId);
+    const config = await whatsappConfig();
+    return NextResponse.json({
+      ok: true,
+      catalogId,
+      message: `Catalogue id ${catalogId} saved. Dishes can now be published to the WhatsApp catalogue.`,
+      configured: config.configured,
     });
   }
 

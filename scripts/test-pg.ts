@@ -794,9 +794,12 @@ async function main() {
     channel: "delivery",
     customerName: "Test Delivery",
     phone: "0411111111",
-    address: "12/48 Pirrama Road",
-    suburb: "Pyrmont",
-    postcode: "2009",
+    // A real Western Sydney address inside a published zone. This test used a
+    // Pyrmont address (2009) because the kitchen used to be assumed to be in
+    // the CBD; the kitchen is in Whalan 2770, and 2009 is correctly refused now.
+    address: "7 Bulolo Drive",
+    suburb: "Whalan",
+    postcode: "2770",
     paymentMethod: "online",
     items: [
       { itemId: items[0].id, variantId: items[0].variants[0].id, qty: 3 },
@@ -2096,35 +2099,73 @@ async function main() {
     section("Delivery zones: postcode rate card and serviceability");
     const db = await getDb();
     const zones = await listDeliveryZones(db);
-    check("Sydney delivery zones are seeded", zones.length >= 4, zones.length);
+    check("Western Sydney delivery zones are seeded", zones.length >= 4, zones.length);
     check(
-      "the zone table covers 2770 (Sydney 2770 was the brief's delivery area)",
+      "the kitchen's own postcode 2770 is served",
       zones.some((zone) => zone.postcodes.split(",").map((p) => p.trim()).includes("2770")),
     );
+    check(
+      "the zone list is not the old Sydney CBD one",
+      !zones.some((zone) => zone.postcodes.includes("2000")),
+      zones.map((zone) => zone.name),
+    );
 
-    const cbd = await quoteFromZones(db, {
-      address: "25 Harris Street",
-      suburb: "Pyrmont",
-      postcode: "2000",
-      orderValueCents: 4500,
-    });
-    check("the CBD postcode is serviceable", cbd.serviceable);
-    check("the CBD resolves to the inner-city zone", cbd.zoneName.includes("CBD"), cbd.zoneName);
-    check("distance is measured from the kitchen", (cbd.distanceKm ?? 0) >= 0);
-
-    const mountDruitt = await quoteFromZones(db, {
-      address: "12 Luxford Road",
-      suburb: "Mount Druitt",
+    const whalan = await quoteFromZones(db, {
+      address: "1/53 Bulolo Dr",
+      suburb: "Whalan",
       postcode: "2770",
       orderValueCents: 4500,
     });
-    check("2770 is serviceable", mountDruitt.serviceable);
-    check("2770 is priced from its own zone", mountDruitt.zoneName.includes("2770") || mountDruitt.zoneName.includes("Mount Druitt"), mountDruitt.zoneName);
+    check("the kitchen's own suburb is serviceable", whalan.serviceable);
     check(
-      "2770 costs more than the CBD — not the same hash-based fee",
-      mountDruitt.feeCents > cbd.feeCents,
-      { cbd: cbd.feeCents, mountDruitt: mountDruitt.feeCents },
+      "2770 resolves to the local zone",
+      /Whalan|Mount Druitt/i.test(whalan.zoneName),
+      whalan.zoneName,
     );
+    check(
+      "the local zone has no per-km charge on an estimated pin",
+      whalan.feeCents === whalan.zone?.base_fee_cents,
+      { fee: whalan.feeCents, base: whalan.zone?.base_fee_cents },
+    );
+
+    // A real Pin: Whalan High School ~1 km from the kitchen. With verified
+    // coordinates the distance is charged, and the fee must reflect that the
+    // address is close, not 39 km away in the CBD.
+    const near = await quoteFromZones(db, {
+      address: "1/53 Bulolo Dr",
+      suburb: "Whalan",
+      postcode: "2770",
+      lat: -33.7595,
+      lng: 150.8105,
+      orderValueCents: 4500,
+    });
+    check("a verified pin near the kitchen is serviceable", near.serviceable);
+    check(
+      "a verified pin near the kitchen measures only a few km",
+      (near.distanceKm ?? 99) < 5,
+      near.distanceKm,
+    );
+
+    const blacktown = await quoteFromZones(db, {
+      address: "1 Main Street",
+      suburb: "Blacktown",
+      postcode: "2148",
+      orderValueCents: 4500,
+    });
+    check("Blacktown 2148 is serviceable", blacktown.serviceable);
+    check(
+      "a further zone costs more than the local one",
+      blacktown.feeCents > whalan.feeCents,
+      { whalan: whalan.feeCents, blacktown: blacktown.feeCents },
+    );
+
+    const parramatta = await quoteFromZones(db, {
+      address: "1 Church Street",
+      suburb: "Parramatta",
+      postcode: "2150",
+      orderValueCents: 4500,
+    });
+    check("Parramatta 2150 is serviceable", parramatta.serviceable);
 
     const unknown = await quoteFromZones(db, {
       address: "1 Nowhere Road",
@@ -2135,9 +2176,22 @@ async function main() {
     check("an unserved postcode is refused, not guessed", !unknown.serviceable);
     check("the refusal explains itself", unknown.note.length > 10, unknown.note);
 
-    const free = await quoteFromZones(db, {
+    // Sydney CBD is 39 km from this kitchen. It must not be quietly servable.
+    const cbd = await quoteFromZones(db, {
       address: "25 Harris Street",
-      postcode: "2000",
+      suburb: "Pyrmont",
+      postcode: "2009",
+      orderValueCents: 4500,
+    });
+    check(
+      "the Sydney CBD is outside this kitchen's delivery area",
+      !cbd.serviceable,
+      cbd.note,
+    );
+
+    const free = await quoteFromZones(db, {
+      address: "1/53 Bulolo Dr",
+      postcode: "2770",
       orderValueCents: 99000,
     });
     check("free delivery applies above the zone threshold", free.freeDelivery && free.feeCents === 0);
@@ -2170,9 +2224,9 @@ async function main() {
         quoteDelivery({
           orderCode: "ZONE-FAR",
           customerName: "Far Test",
-          dropoffAddress: "1 Nowhere Road",
-          dropoffSuburb: "Byron Bay",
-          dropoffPostcode: "2481",
+          dropoffAddress: "25 Harris Street",
+          dropoffSuburb: "Pyrmont",
+          dropoffPostcode: "2009",
           orderValueCents: 4500,
         }),
       /do not deliver|Outside/i,

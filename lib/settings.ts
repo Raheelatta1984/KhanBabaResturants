@@ -6,15 +6,18 @@ export const DEFAULT_COMMUNITY_AUTO_REPLY = "thank you we have got it booked";
 export const DEFAULT_SETTINGS: Record<string, string> = {
   restaurant_name: "Khan Baba Restaurant",
   restaurant_tagline: "Pakistani Cuisine — Same taste from Lahore to Sydney",
-  restaurant_phone: "02 9000 1234",
+  // The kitchen is in Whalan, Western Sydney. It was previously seeded as
+  // Pitt Street in the CBD, which put every delivery estimate 39 km east of
+  // the actual fryer.
+  restaurant_phone: "0461 382 923",
   restaurant_email: "hello@khanbabarestaurant.com.au",
-  restaurant_address: "Shop 4, 379 Pitt Street, Sydney NSW 2000",
-  restaurant_suburb: "Sydney",
-  restaurant_postcode: "2000",
+  restaurant_address: "1/53 Bulolo Dr, Whalan NSW 2770",
+  restaurant_suburb: "Whalan",
+  restaurant_postcode: "2770",
   restaurant_state: "NSW",
   restaurant_country: "AU",
-  restaurant_lat: "-33.8688",
-  restaurant_lng: "151.2093",
+  restaurant_lat: "-33.757",
+  restaurant_lng: "150.804",
   restaurant_hours:
     "Mon–Thu 11:00–22:00 · Fri–Sat 11:00–23:00 · Sun 11:00–22:00",
   timezone: "Australia/Sydney",
@@ -124,8 +127,8 @@ export const DEFAULT_SETTINGS: Record<string, string> = {
   whatsapp_catalog_id: "",
   whatsapp_verify_token: "",
   whatsapp_app_secret: "",
-  whatsapp_counter_number: "", // staff number that receives new orders
-  whatsapp_display_number: "", // the public business number shown to customers
+  whatsapp_counter_number: "0461 382 923", // staff number that receives new orders
+  whatsapp_display_number: "+61410913853", // the public business number shown to customers
   whatsapp_currency: "AUD",
   whatsapp_publish_enabled: "1",
   whatsapp_notify_customer: "1",

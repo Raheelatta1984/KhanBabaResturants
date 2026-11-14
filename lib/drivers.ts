@@ -14,7 +14,7 @@ import {
   interpolate,
   pathKm,
   roadKm,
-  SYDNEY_CBD,
+  KITCHEN_FALLBACK,
   type LatLng,
 } from "./geo";
 
@@ -622,8 +622,8 @@ export async function settleDriverJob(
     }>("SELECT * FROM orders WHERE id = $1", [job.order_id]);
     if (order) {
       const origin: LatLng = {
-        lat: Number.parseFloat(settingValue(settings, "restaurant_lat", "")) || SYDNEY_CBD.lat,
-        lng: Number.parseFloat(settingValue(settings, "restaurant_lng", "")) || SYDNEY_CBD.lng,
+        lat: Number.parseFloat(settingValue(settings, "restaurant_lat", "")) || KITCHEN_FALLBACK.lat,
+        lng: Number.parseFloat(settingValue(settings, "restaurant_lng", "")) || KITCHEN_FALLBACK.lng,
       };
       const dropoff: LatLng =
         order.delivery_lat != null && order.delivery_lng != null
@@ -805,8 +805,8 @@ export async function trackingSnapshot(
 ) {
   const settings = await getSettings();
   const origin: LatLng = {
-    lat: Number.parseFloat(settingValue(settings, "restaurant_lat", "")) || SYDNEY_CBD.lat,
-    lng: Number.parseFloat(settingValue(settings, "restaurant_lng", "")) || SYDNEY_CBD.lng,
+    lat: Number.parseFloat(settingValue(settings, "restaurant_lat", "")) || KITCHEN_FALLBACK.lat,
+    lng: Number.parseFloat(settingValue(settings, "restaurant_lng", "")) || KITCHEN_FALLBACK.lng,
   };
   const dropoff: LatLng =
     order.delivery_lat != null && order.delivery_lng != null

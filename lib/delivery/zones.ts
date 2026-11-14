@@ -1,6 +1,6 @@
 import type { Db } from "../db";
 import { getSettings, settingNumber, settingValue } from "../settings";
-import { SYDNEY_CBD, estimateCoordinates, haversineKm, roadKm, type LatLng } from "../geo";
+import { KITCHEN_FALLBACK, estimateCoordinates, haversineKm, roadKm, type LatLng } from "../geo";
 
 /**
  * Postcode delivery zones.
@@ -93,7 +93,7 @@ export async function kitchenLocation(): Promise<LatLng> {
   const lng = Number.parseFloat(settingValue(settings, "restaurant_lng", ""));
   return Number.isFinite(lat) && Number.isFinite(lng) && lat !== 0 && lng !== 0
     ? { lat, lng }
-    : SYDNEY_CBD;
+    : KITCHEN_FALLBACK;
 }
 
 /**

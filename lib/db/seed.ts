@@ -2889,23 +2889,25 @@ async function seedLahoreAndWhatsApp(db: Database): Promise<void> {
 }
 
 /**
- * Sydney delivery zones.
+ * Delivery zones, radiating from the kitchen at 1/53 Bulolo Dr, Whalan 2770.
  *
- * Read from the map, not invented: the kitchen sits on the CBD fringe, so the
- * inner ring is on foot, the middle ring is a short drive, and 2770 (Mount
- * Druitt / Willmot / Emerton) is the western edge of what a single kitchen can
- * reach without the food going cold. Fees are deliberately whole dollars so
- * staff can quote them across the counter without a calculator.
+ * These are Western Sydney postcodes, not CBD ones: the first version of this
+ * was seeded around Pitt Street because the stored restaurant address said so.
+ * The real kitchen is 39 km west, so the whole rate card is rebuilt around
+ * Mount Druitt, Blacktown, Penrith and the A9 corridor.
+ *
+ * Fees are deliberately whole-ish numbers so staff can quote them across the
+ * counter without a calculator.
  */
 async function seedDeliveryZones(db: Database): Promise<void> {
   const existing = await db.maybeOne<{ c: number }>(
     "SELECT COUNT(*) AS c FROM delivery_zones",
   );
   if (Number(existing?.c ?? 0) > 0) return;
-  // The list below is a deliberately complete Sydney coverage, so the store
-  // refuses addresses it cannot serve instead of quoting a distant suburb on a
-  // radius. An install that has not filled its zones in keeps the permissive
-  // default (0) and keeps selling.
+  // The list below is a deliberately complete Western Sydney coverage, so the
+  // store refuses addresses it cannot serve instead of quoting a distant
+  // suburb on a radius. An install that has not filled its zones in keeps the
+  // permissive default (0) and keeps selling.
   await db.query(
     "INSERT INTO settings (key, value) VALUES ('delivery_zones_strict','1') ON CONFLICT (key) DO UPDATE SET value = '1'",
   );
@@ -2913,28 +2915,28 @@ async function seedDeliveryZones(db: Database): Promise<void> {
   const zones: [string, string, string, number, number, number, number, number, number][] = [
     // name, suburbs, postcodes, base, per_km, min_order, free_over, eta, radius
     [
-      "CBD & Inner City",
-      "Sydney, Haymarket, Ultimo, Chippendale, Surry Hills, Darlinghurst, Pyrmont, Woolloomooloo",
-      "2000,2008,2009,2010,2016,2017,2011",
-      299, 0, 2000, 6000, 25, 8,
-    ],
-    [
-      "Inner West & Eastern Suburbs",
-      "Newtown, Enmore, Marrickville, Leichhardt, Alexandria, Mascot, Randwick, Bondi, Ashfield, Burwood",
-      "2042,2043,2044,2045,2015,2020,2031,2032,2033,2034,2026,2024,2025,2023,2130,2131,2132,2133,2134,2135,2136,2137,2138,2037,2038,2039,2040",
-      399, 120, 2500, 7500, 35, 14,
-    ],
-    [
-      "Western Sydney",
-      "Parramatta, Auburn, Granville, Merrylands, Guildford, Blacktown, Strathfield",
-      "2140,2141,2142,2143,2144,2145,2146,2147,2148,2160,2161,2162,2163,2165,2166,2149,2139,2150,2151,2152,2153,2154,2155,2156,2157,2158,2159,2164,2167,2168,2170,2196,2200,2203,2204,2205,2206,2207,2208,2209,2210,2211,2212,2213,2214,2216,2217,2218,2219,2220,2221,2222,2223,2224,2226,2230,2231,2232,2233,2234,2176,2177,2178,2179,2747",
-      499, 150, 3000, 9000, 45, 30,
-    ],
-    [
-      "Mount Druitt & 2770",
-      "Mount Druitt, Willmot, Emerton, Whalan, Tregear, Blackett, Dharruk, Bidwill",
+      "Whalan & Mount Druitt",
+      "Whalan, Mount Druitt, Willmot, Emerton, Tregear, Blackett, Dharruk, Bidwill, Shalvey",
       "2770",
-      699, 175, 3500, 12000, 55, 45,
+      299, 0, 2000, 5000, 25, 8,
+    ],
+    [
+      "Blacktown & St Marys",
+      "Blacktown, St Marys, Doonside, Rooty Hill, Plumpton, Hassall Grove, Oakhurst, Quakers Hill, Marayong, Kings Park, Lethbridge Park, Ropes Crossing, Tregear",
+      "2760,2761,2762,2763,2764,2765,2766,2767,2768,2770,2148,2777",
+      399, 120, 2500, 7000, 35, 14,
+    ],
+    [
+      "Penrith & Nepean",
+      "Penrith, Kingswood, Werrington, Cambridge Gardens, Cranebrook, Jordan Springs, South Penrith, Emu Plains, Glenmore Park, Regentville, Jamisontown",
+      "2747,2748,2749,2750,2751,2759,2761,2762,2765,2766,2768,2769,2773,2774,2775,2776",
+      499, 150, 3000, 9000, 45, 25,
+    ],
+    [
+      "Parramatta & Western Sydney",
+      "Parramatta, Merrylands, Granville, Guildford, Auburn, Wentworthville, Toongabbie, Seven Hills, Prospect, Girraween, Greystanes, Pendle Hill",
+      "2140,2141,2142,2143,2144,2145,2146,2147,2148,2149,2150,2151,2152,2153,2154,2155,2156,2157,2158,2159,2160,2161,2162,2163,2164,2165,2166",
+      599, 175, 3500, 11000, 55, 30,
     ],
   ];
 

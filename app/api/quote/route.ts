@@ -6,7 +6,7 @@ import { quoteDelivery } from "@/lib/delivery";
 import { addressHash, signQuote } from "@/lib/quotes";
 import { getSettingNumber } from "@/lib/settings";
 import { validatePromotion, PromotionError } from "@/lib/promotions";
-import { coordinate, estimateCoordinates, SYDNEY_CBD } from "@/lib/geo";
+import { coordinate } from "@/lib/geo";
 
 export const dynamic = "force-dynamic";
 
@@ -61,12 +61,10 @@ export async function POST(request: Request) {
     let quoteToken: string | undefined;
 
     if (channel === "delivery" && hasAddress) {
-      const fallback = estimateCoordinates(
-        body.address ?? "",
-        body.suburb ?? "",
-        body.postcode ?? "",
-        SYDNEY_CBD,
-      );
+      // Only a pin the browser actually geocoded is passed on. This used to
+      // invent one around the CBD and hand it over as if it were real, which
+      // let a made-up coordinate decide both the fee and whether the address
+      // was serviceable at all.
       delivery = await quoteDelivery({
         orderCode: "QUOTE",
         customerName: body.customerName || "Guest",
@@ -75,8 +73,8 @@ export async function POST(request: Request) {
         dropoffSuburb: body.suburb,
         dropoffPostcode: body.postcode,
         dropoffNotes: body.notes,
-        dropoffLat: coordinate(body.deliveryLat) ?? fallback.lat,
-        dropoffLng: coordinate(body.deliveryLng) ?? fallback.lng,
+        dropoffLat: coordinate(body.deliveryLat),
+        dropoffLng: coordinate(body.deliveryLng),
         orderValueCents: subtotalCents,
       });
       quoteToken = signQuote({

@@ -653,3 +653,159 @@ export function whatsappChatLink(number: string, message?: string): string {
   const query = message ? `?text=${encodeURIComponent(message)}` : "";
   return `https://wa.me/${digits}${query}`;
 }
+
+/**
+ * Discover the WhatsApp catalog id from Meta instead of hunting the UI.
+ *
+ * The catalog id is the one value in the whole setup that an owner cannot find
+ * by looking at the obvious screens: it is not on the API setup page, it is not
+ * the WABA id, and in Commerce Manager it appears only in the URL of a page you
+ * have to already be on. It *is* however an attribute of the business account,
+ * so the Graph API can simply answer the question once the token is valid:
+ *
+ *   GET /{WABA_ID}?fields=id,name,owner_business_info,product_catalogs
+ *
+ * This returns every catalog the token can see, which one is already connected
+ * to the business account, and a plain-English next step when there isn't one.
+ */
+export type CatalogDiscovery = {
+  ok: boolean;
+  configuredCatalogId: string | null;
+  businessAccountId: string | null;
+  businessAccountName: string | null;
+  catalogs: {
+    id: string;
+    name: string;
+    /** True when this is the catalog the business account already uses. */
+    connected: boolean;
+    source: "waba" | "business" | "owned";
+  }[];
+  suggestedCatalogId: string | null;
+  error?: string;
+  hint?: string;
+  setupSteps: string[];
+};
+
+type CatalogNode = { id?: string; name?: string; product_catalog?: { id?: string; name?: string }[] };
+
+function catalogsFrom(value: unknown): CatalogNode[] {
+  if (!value || typeof value !== "object") return [];
+  const node = value as { data?: unknown; product_catalogs?: unknown };
+  const list = Array.isArray(node.data)
+    ? node.data
+    : Array.isArray(node.product_catalogs)
+      ? (node.product_catalogs as { data?: unknown }).data
+      : node.product_catalogs;
+  if (!Array.isArray(list)) return [];
+  return list as CatalogNode[];
+}
+
+export async function discoverWhatsAppCatalog(): Promise<CatalogDiscovery> {
+  const config = await whatsappConfig();
+  const setupSteps = [
+    "Open business.facebook.com → All tools → Commerce Manager → Add catalog → name it “Khan Baba Menu”, choose Online products, currency AUD.",
+    "Still in Commerce Manager: Settings → Catalog ID is shown as Content ID. Or read the digits in the URL (/catalog/1234567890/products).",
+    "Go to WhatsApp Manager → Account tools → Catalog → Choose catalog → Connect catalog, and select the Khan Baba catalog.",
+    "Turn on “Show catalog icon in chat header” so customers can browse the menu in the chat.",
+    "Paste the Content ID into Admin → WhatsApp Business → WhatsApp Catalogue ID and save.",
+  ];
+
+  if (!config.configured) {
+    return {
+      ok: false,
+      configuredCatalogId: config.catalogId || null,
+      businessAccountId: config.businessAccountId || null,
+      businessAccountName: null,
+      catalogs: [],
+      suggestedCatalogId: null,
+      error: "WhatsApp is not configured yet.",
+      hint: "Add the phone number id and a valid access token first — the catalog lookup uses the same token.",
+      setupSteps,
+    };
+  }
+  if (!config.businessAccountId) {
+    return {
+      ok: false,
+      configuredCatalogId: config.catalogId || null,
+      businessAccountId: null,
+      businessAccountName: null,
+      catalogs: [],
+      suggestedCatalogId: null,
+      error: "No business account id (WABA id) is set.",
+      hint: "It is the “WhatsApp Business Account ID” on Meta → WhatsApp → API setup, next to the phone number id.",
+      setupSteps,
+    };
+  }
+
+  const found = new Map<string, CatalogDiscovery["catalogs"][number]>();
+  const add = (id: string | undefined, name: string | undefined, source: "waba" | "business" | "owned") => {
+    if (!id) return;
+    if (found.has(id)) return;
+    found.set(id, { id, name: name ?? "Untitled catalog", connected: false, source });
+  };
+
+  const waba = await getGraph(
+    config,
+    `${config.businessAccountId}?fields=id,name,product_catalogs`,
+  );
+  let businessAccountName: string | null = null;
+  if (waba.ok) {
+    businessAccountName = String(waba.data.name ?? "") || null;
+    for (const node of catalogsFrom(waba.data.product_catalogs)) {
+      add(node.id, node.name, "waba");
+    }
+  }
+
+  // A catalog already connected to the business account is the right answer,
+  // so prefer it over anything else the token can see.
+  const connected = await getGraph(config, `${config.businessAccountId}/product_catalogs?limit=25`);
+  if (connected.ok) {
+    for (const node of catalogsFrom(connected.data)) add(node.id, node.name, "waba");
+  }
+
+  if (waba.ok || connected.ok) {
+    if (config.catalogId) {
+      const existing = found.get(config.catalogId);
+      if (existing) existing.connected = true;
+    }
+  }
+
+  // Anything the configured catalog id points at is by definition the one in use.
+  if (config.catalogId && !found.has(config.catalogId)) {
+    add(config.catalogId, "Configured catalog", "owned");
+    const own = found.get(config.catalogId);
+    if (own) own.connected = true;
+  }
+
+  const catalogs = [...found.values()].sort(
+    (a, b) => Number(b.connected) - Number(a.connected) || a.name.localeCompare(b.name),
+  );
+  const suggested =
+    config.catalogId && catalogs.some((row) => row.id === config.catalogId)
+      ? config.catalogId
+      : (catalogs.find((row) => row.connected)?.id ?? catalogs[0]?.id ?? null);
+
+  if (!waba.ok && !connected.ok) {
+    return {
+      ok: false,
+      configuredCatalogId: config.catalogId || null,
+      businessAccountId: config.businessAccountId,
+      businessAccountName,
+      catalogs,
+      suggestedCatalogId: suggested,
+      error: waba.error ?? connected.error ?? "Meta rejected the lookup",
+      hint: whatsappErrorHint(waba.code, waba.subcode),
+      setupSteps,
+    };
+  }
+
+  return {
+    ok: true,
+    configuredCatalogId: config.catalogId || null,
+    businessAccountId: config.businessAccountId,
+    businessAccountName,
+    catalogs,
+    suggestedCatalogId: suggested,
+    setupSteps,
+  };
+}

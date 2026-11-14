@@ -19,6 +19,23 @@ type Credential = {
   shadowed: boolean;
 };
 
+type CatalogDiscovery = {
+  ok: boolean;
+  configuredCatalogId: string | null;
+  businessAccountId: string | null;
+  businessAccountName: string | null;
+  catalogs: {
+    id: string;
+    name: string;
+    connected: boolean;
+    source: string;
+  }[];
+  suggestedCatalogId: string | null;
+  error?: string;
+  hint?: string;
+  setupSteps: string[];
+};
+
 type Diagnostics = {
   ok: boolean;
   checkedAt: string;
@@ -53,6 +70,7 @@ type Diagnostics = {
       freeOver: number | null;
     }[];
   };
+  catalog: CatalogDiscovery | null;
   social: {
     facebookPageId: string | null;
     facebookToken: string;
@@ -92,6 +110,34 @@ export function IntegrationDiagnostics() {
   useEffect(() => {
     void load();
   }, []);
+
+  const findCatalog = async () => {
+    setBusy(true);
+    try {
+      const res = await fetch("/api/ops/diagnostics?catalog=1", { cache: "no-store" });
+      const json = (await res.json()) as Diagnostics & { error?: string };
+      if (json.error) setNote(json.error);
+      else setData(json);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const saveCatalog = async (catalogId: string) => {
+    setBusy(true);
+    try {
+      const res = await fetch("/api/ops/diagnostics", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "set-catalog-id", catalogId }),
+      });
+      const json = (await res.json()) as { message?: string; error?: string };
+      setNote(json.message ?? json.error ?? null);
+      await load();
+    } finally {
+      setBusy(false);
+    }
+  };
 
   const setMode = async (mode: string) => {
     setBusy(true);
@@ -231,6 +277,112 @@ export function IntegrationDiagnostics() {
           Last failed send: {data.lastFailure.error} · {new Date(data.lastFailure.created_at).toLocaleString("en-AU")}
         </p>
       ) : null}
+
+      <div className="card" style={{ padding: 14, marginTop: 18 }}>
+        <div className="row" style={{ flexWrap: "wrap", gap: 8 }}>
+          <b className="small">WhatsApp catalog</b>
+          <span className={`badge ${data.whatsapp.catalogId ? "badge-green" : "badge-amber"}`}>
+            {data.whatsapp.catalogId ? `id ${data.whatsapp.catalogId}` : "not set"}
+          </span>
+          <button className="btn btn-sm" disabled={busy} onClick={() => void findCatalog()}>
+            <Icon name="search" size={13} /> Find my catalog
+          </button>
+        </div>
+        <p className="tiny muted" style={{ marginTop: 8 }}>
+          Asks Meta which catalogs this business account can use, and offers to save the
+          right one. Nothing is created or deleted on Meta&apos;s side.
+        </p>
+
+        {data.catalog ? (
+          data.catalog.ok ? (
+            data.catalog.catalogs.length > 0 ? (
+              <table className="table tiny" style={{ marginTop: 8 }}>
+                <thead>
+                  <tr>
+                    <th>Catalog</th>
+                    <th>ID</th>
+                    <th>Status</th>
+                    <th></th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {data.catalog.catalogs.map((row) => (
+                    <tr key={row.id}>
+                      <td>{row.name}</td>
+                      <td>
+                        <code className="tiny">{row.id}</code>
+                      </td>
+                      <td>
+                        {row.connected ? (
+                          <span className="badge badge-green">connected</span>
+                        ) : (
+                          <span className="badge">available</span>
+                        )}
+                      </td>
+                      <td>
+                        {data.whatsapp.catalogId === row.id ? (
+                          <span className="tiny muted">in use</span>
+                        ) : (
+                          <button
+                            className="btn btn-sm"
+                            disabled={busy}
+                            onClick={() => void saveCatalog(row.id)}
+                          >
+                            Use this
+                          </button>
+                        )}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            ) : (
+              <div style={{ marginTop: 8 }}>
+                <p className="small">
+                  <span className="badge badge-amber">no catalog yet</span> Meta returned no
+                  catalog for this business account.
+                </p>
+                <ol className="small" style={{ margin: "8px 0 0 18px" }}>
+                  {data.catalog.setupSteps.map((step) => (
+                    <li key={step} style={{ marginBottom: 4 }}>
+                      {step}
+                    </li>
+                  ))}
+                </ol>
+              </div>
+            )
+          ) : (
+            <div style={{ marginTop: 8 }}>
+              <p className="small">
+                <span className="badge badge-amber">lookup failed</span> {data.catalog.error}
+                {data.catalog.hint ? <span className="muted"> — {data.catalog.hint}</span> : null}
+              </p>
+              <p className="tiny muted" style={{ marginTop: 6 }}>
+                Fix the token first, then press “Find my catalog” again.
+              </p>
+            </div>
+          )
+        ) : null}
+
+        {!data.whatsapp.catalogId ? (
+          <details style={{ marginTop: 10 }}>
+            <summary className="small">Do it by hand in Meta</summary>
+            <ol className="small" style={{ margin: "8px 0 0 18px" }}>
+              {[
+                "business.facebook.com → All tools → Commerce Manager → Add catalog → “Khan Baba Menu”, Online products, currency AUD.",
+                "In the catalog: Settings shows the Catalog ID as Content ID. It is also the digits in the URL /catalog/<id>/products.",
+                "WhatsApp Manager → Account tools → Catalog → Choose catalog → Connect catalog.",
+                "Turn on “Show catalog icon in chat header”.",
+                "Paste the Content ID here, or in Admin → WhatsApp Business → WhatsApp Catalogue ID.",
+              ].map((step) => (
+                <li key={step} style={{ marginBottom: 4 }}>
+                  {step}
+                </li>
+              ))}
+            </ol>
+          </details>
+        ) : null}
+      </div>
 
       <div className="grid grid-2" style={{ marginTop: 18, gap: 14 }}>
         <div className="card" style={{ padding: 14 }}>

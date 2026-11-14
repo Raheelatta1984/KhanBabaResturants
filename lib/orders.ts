@@ -22,7 +22,8 @@ import {
   PromotionError,
 } from "./promotions";
 import { trackingSnapshot, settleDriverJob } from "./drivers";
-import { coordinate, estimateCoordinates, SYDNEY_CBD } from "./geo";
+import { coordinate, estimateCoordinates } from "./geo";
+import { kitchenLocation } from "./delivery/zones";
 import { consumeStockForOrder } from "./whatsapp/catalog";
 
 export class OrderError extends Error {
@@ -498,26 +499,30 @@ export async function createOrder(
   // Delivery coordinates: trusted from the browser geocoder when present,
   // otherwise a deterministic estimate so distance fees, maps and ATO trip logs
   // always have a usable point. Staff can correct them in Admin → Orders.
-  const deliveryLat =
-    channel === "delivery"
-      ? (coordinate(input.deliveryLat) ??
-        estimateCoordinates(
-          input.address ?? "",
-          input.suburb ?? "",
-          input.postcode ?? "",
-          SYDNEY_CBD,
-        ).lat)
-      : null;
-  const deliveryLng =
-    channel === "delivery"
-      ? (coordinate(input.deliveryLng) ??
-        estimateCoordinates(
-          input.address ?? "",
-          input.suburb ?? "",
-          input.postcode ?? "",
-          SYDNEY_CBD,
-        ).lng)
-      : null;
+  //
+  // The estimate is centred on the *kitchen from settings*, not on a constant.
+  // It used to be centred on the Sydney CBD, 39 km from the Whalan kitchen, so
+  // every un-geocoded delivery got a pin in the wrong city.
+  let deliveryLat: number | null = null;
+  let deliveryLng: number | null = null;
+  if (channel === "delivery") {
+    const givenLat = coordinate(input.deliveryLat);
+    const givenLng = coordinate(input.deliveryLng);
+    if (givenLat && givenLng) {
+      deliveryLat = givenLat;
+      deliveryLng = givenLng;
+    } else {
+      const kitchen = await kitchenLocation();
+      const estimated = estimateCoordinates(
+        input.address ?? "",
+        input.suburb ?? "",
+        input.postcode ?? "",
+        kitchen,
+      );
+      deliveryLat = givenLat ?? estimated.lat;
+      deliveryLng = givenLng ?? estimated.lng;
+    }
+  }
 
   // Delivery fee: trust only a signed quote for this address, otherwise re-quote live.
   let delivery: DeliveryPricing | null = null;
