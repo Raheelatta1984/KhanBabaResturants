@@ -152,6 +152,7 @@ import {
   parseOrderText,
   requestOrderPayment,
 } from "../lib/whatsapp/orders";
+import { whatsappConfig } from "../lib/whatsapp/client";
 import { parkOrder, settleTableOrder } from "../lib/dine-in";
 import {
   feedbackInviteByToken,
@@ -1893,6 +1894,32 @@ async function main() {
       "a dish publishes to the WhatsApp catalogue (sandbox)",
       published.status === "published" && published.sandbox,
       published,
+    );
+
+    const sandboxConfig = await whatsappConfig();
+    check(
+      "with no credentials the channel reports sandbox and says what is missing",
+      sandboxConfig.mode === "sandbox" &&
+        sandboxConfig.sources.phoneNumberId === "none" &&
+        sandboxConfig.sources.counterNumber === "settings",
+      sandboxConfig.sources,
+    );
+    process.env.WHATSAPP_PHONE_NUMBER_ID = "123456789012345";
+    process.env.WHATSAPP_ACCESS_TOKEN = "test-permanent-token";
+    const envConfig = await whatsappConfig();
+    check(
+      "Vercel environment variables win over portal settings and flip the channel live",
+      envConfig.mode === "live" &&
+        envConfig.sources.phoneNumberId === "env" &&
+        envConfig.sources.accessToken === "env" &&
+        envConfig.sources.counterNumber === "settings",
+      envConfig.sources,
+    );
+    delete process.env.WHATSAPP_PHONE_NUMBER_ID;
+    delete process.env.WHATSAPP_ACCESS_TOKEN;
+    check(
+      "unsetting them returns the channel to sandbox",
+      (await whatsappConfig()).mode === "sandbox",
     );
     const tracked = await setItemStock(db, items[0].id, "Manager Tester", {
       stockQty: 2,
