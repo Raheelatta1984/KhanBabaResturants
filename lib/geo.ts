@@ -11,7 +11,23 @@
 
 export type LatLng = { lat: number; lng: number };
 
-export const SYDNEY_CBD: LatLng = { lat: -33.8688, lng: 151.2093 };
+/**
+ * The kitchen's location: 1/53 Bulolo Dr, Whalan NSW 2770.
+ *
+ * This is only the fallback — every caller that can read settings uses
+ * `restaurant_lat` / `restaurant_lng` from the database instead. It exists so
+ * that a map, a driver search or a delivery estimate still has a sensible
+ * origin before settings load (and in tests).
+ *
+ * It used to be the Sydney CBD, ~39 km east of here. Every estimated delivery
+ * pin was therefore generated around the CBD, and the whole delivery radius was
+ * measured from the wrong place — which is why a Mount Druitt order "measured"
+ * 11 km from a kitchen that is 3 km away.
+ */
+export const KITCHEN_FALLBACK: LatLng = { lat: -33.757, lng: 150.804 };
+
+/** @deprecated Use KITCHEN_FALLBACK, or better, the kitchen from settings. */
+export const SYDNEY_CBD = KITCHEN_FALLBACK;
 
 const RAD = Math.PI / 180;
 const EARTH_KM = 6371.0088;
@@ -75,7 +91,7 @@ export function estimateCoordinates(
   address: string,
   suburb = "",
   postcode = "",
-  origin: LatLng = SYDNEY_CBD,
+  origin: LatLng = KITCHEN_FALLBACK,
 ): LatLng {
   const input = `${address}|${suburb}|${postcode}`.trim().toLowerCase();
   let h = 2166136261;

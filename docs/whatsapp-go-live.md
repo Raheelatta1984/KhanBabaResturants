@@ -265,3 +265,49 @@ fix, and the message log stores the same text, so a failed test never looks like
 - The webhook is signature-checked on every delivery once `WHATSAPP_APP_SECRET` is set. Do not disable it.
 - Payment links are single-use and expiring, and they never expose card details — the gateway handles the
   card, the portal only records the result.
+
+---
+
+## When a send fails with "Authentication Error" (Meta code 190)
+
+This is the failure that was actually hit in production, so it is worth knowing before it happens again.
+
+`Authentication Error` / `OAuthException` / `code 190` means **Meta rejected the token itself**. It is not
+a permission problem, not a template problem and not a recipient problem. Three things cause it:
+
+1. **The token expired.** Short-lived tokens (the ones the API setup page hands out) last about 24 hours.
+   Only a **System User** token does not expire. That is the one to use.
+2. **The token was rotated.** Generating a new token in Meta invalidates the previous one.
+3. **The deployment is sending a different token than the one you just saved.** This is the one that
+   wastes an afternoon. Vercel keeps `sensitive` variables that the dashboard will not show you, and a
+   Vercel variable **wins** over the value saved in Admin → WhatsApp Business. So you paste a good token
+   into the portal, save, test, and still get 190 — because nothing you changed was being used.
+
+### How the app now protects you from (3)
+
+- **Admin → Marketing → Integration diagnostics** (also `/api/ops/diagnostics`) shows, for every
+  credential, whether it came from **Vercel env**, the **admin portal**, or is **missing** — and flags
+  any portal value that a Vercel variable is overriding. Tokens are masked to their last four
+  characters on the server before they are sent to the browser.
+- It also prints the **last failed send** and Meta's code, so the message in the portal matches the
+  message in `whatsapp_messages`.
+- The new setting `whatsapp_credential_mode` decides which source wins:
+  - `auto` (default) — a Vercel variable wins when one exists, otherwise the portal value.
+  - `settings` — the value saved in Admin → WhatsApp Business wins, even if Vercel has one.
+  - `env` — Vercel always wins.
+
+  Flip it from the diagnostics panel with one click; it is a single setting and no secret moves.
+
+### The 5-minute fix
+
+1. Meta → Business settings → **Users → System users** → your system user → **Generate token**.
+2. Select the WhatsApp Business Account and the app. Grant `whatsapp_business_messaging` and
+   `whatsapp_business_management`.
+3. Save the token **once**, in one place:
+   - either Vercel → Settings → Environment Variables → `WHATSAPP_ACCESS_TOKEN` (then redeploy), **or**
+   - Admin → WhatsApp Business → Access token.
+4. If you used Vercel, delete the *other* source or set `whatsapp_credential_mode` to the one you used.
+5. Admin → Marketing → **Integration diagnostics** → **Test live connection**. It should say
+   `Connected as <business name>`.
+6. Send a test message. Outside the 24-hour window only an approved template can be sent — the app
+   already tries `hello_world` first and falls back to free text automatically.

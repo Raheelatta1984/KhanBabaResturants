@@ -1208,6 +1208,7 @@ export async function seedDatabase(db: Database): Promise<{ seeded: boolean }> {
     await seedProductionAndOrders(tx);
     await seedPlatformExpansion(tx);
     await seedLahoreAndWhatsApp(tx);
+    await seedDeliveryZones(tx);
     return { seeded: true };
   });
 }
@@ -2883,6 +2884,69 @@ async function seedLahoreAndWhatsApp(db: Database): Promise<void> {
         subtotal,
         "https://www.google.com/maps/search/?api=1&query=Khan%20Baba%20Restaurant",
       ],
+    );
+  }
+}
+
+/**
+ * Delivery zones, radiating from the kitchen at 1/53 Bulolo Dr, Whalan 2770.
+ *
+ * These are Western Sydney postcodes, not CBD ones: the first version of this
+ * was seeded around Pitt Street because the stored restaurant address said so.
+ * The real kitchen is 39 km west, so the whole rate card is rebuilt around
+ * Mount Druitt, Blacktown, Penrith and the A9 corridor.
+ *
+ * Fees are deliberately whole-ish numbers so staff can quote them across the
+ * counter without a calculator.
+ */
+async function seedDeliveryZones(db: Database): Promise<void> {
+  const existing = await db.maybeOne<{ c: number }>(
+    "SELECT COUNT(*) AS c FROM delivery_zones",
+  );
+  if (Number(existing?.c ?? 0) > 0) return;
+  // The list below is a deliberately complete Western Sydney coverage, so the
+  // store refuses addresses it cannot serve instead of quoting a distant
+  // suburb on a radius. An install that has not filled its zones in keeps the
+  // permissive default (0) and keeps selling.
+  await db.query(
+    "INSERT INTO settings (key, value) VALUES ('delivery_zones_strict','1') ON CONFLICT (key) DO UPDATE SET value = '1'",
+  );
+
+  const zones: [string, string, string, number, number, number, number, number, number][] = [
+    // name, suburbs, postcodes, base, per_km, min_order, free_over, eta, radius
+    [
+      "Whalan & Mount Druitt",
+      "Whalan, Mount Druitt, Willmot, Emerton, Tregear, Blackett, Dharruk, Bidwill, Shalvey",
+      "2770",
+      299, 0, 2000, 5000, 25, 8,
+    ],
+    [
+      "Blacktown & St Marys",
+      "Blacktown, St Marys, Doonside, Rooty Hill, Plumpton, Hassall Grove, Oakhurst, Quakers Hill, Marayong, Kings Park, Lethbridge Park, Ropes Crossing, Tregear",
+      "2760,2761,2762,2763,2764,2765,2766,2767,2768,2770,2148,2777",
+      399, 120, 2500, 7000, 35, 14,
+    ],
+    [
+      "Penrith & Nepean",
+      "Penrith, Kingswood, Werrington, Cambridge Gardens, Cranebrook, Jordan Springs, South Penrith, Emu Plains, Glenmore Park, Regentville, Jamisontown",
+      "2747,2748,2749,2750,2751,2759,2761,2762,2765,2766,2768,2769,2773,2774,2775,2776",
+      499, 150, 3000, 9000, 45, 25,
+    ],
+    [
+      "Parramatta & Western Sydney",
+      "Parramatta, Merrylands, Granville, Guildford, Auburn, Wentworthville, Toongabbie, Seven Hills, Prospect, Girraween, Greystanes, Pendle Hill",
+      "2140,2141,2142,2143,2144,2145,2146,2147,2148,2149,2150,2151,2152,2153,2154,2155,2156,2157,2158,2159,2160,2161,2162,2163,2164,2165,2166",
+      599, 175, 3500, 11000, 55, 30,
+    ],
+  ];
+
+  for (const [index, zone] of zones.entries()) {
+    const [name, suburbs, postcodes, base, perKm, minOrder, freeOver, eta, radius] = zone;
+    await db.query(
+      `INSERT INTO delivery_zones (name, suburbs, postcodes, base_fee_cents, per_km_cents,
+         min_order_cents, free_over_cents, eta_minutes, max_radius_km, active, sort_order)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,TRUE,$10)`,
+      [name, suburbs, postcodes, base, perKm, minOrder, freeOver, eta, radius, index],
     );
   }
 }

@@ -13,7 +13,7 @@ import {
   estimateCoordinates,
   roadKm,
   etaMinutes,
-  SYDNEY_CBD,
+  KITCHEN_FALLBACK,
   type LatLng,
 } from "../geo";
 
@@ -61,7 +61,7 @@ export class OwnFleetProvider implements DeliveryProvider {
     const lng = Number.parseFloat(settingValue(settings, "restaurant_lng", ""));
     return Number.isFinite(lat) && Number.isFinite(lng)
       ? { lat, lng }
-      : SYDNEY_CBD;
+      : KITCHEN_FALLBACK;
   }
 
   /** Approved drivers with capacity, closest first. */
@@ -97,7 +97,7 @@ export class OwnFleetProvider implements DeliveryProvider {
             ? { lat: row.current_lat, lng: row.current_lng }
             : row.base_lat != null && row.base_lng != null
               ? { lat: row.base_lat, lng: row.base_lng }
-              : SYDNEY_CBD;
+              : KITCHEN_FALLBACK;
         return { ...row, distanceKm: roadKm(start, point) };
       })
       .filter((row) => row.distanceKm <= Math.max(1, row.max_radius_km));

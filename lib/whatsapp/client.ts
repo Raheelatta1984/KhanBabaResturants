@@ -36,46 +36,125 @@ export type WhatsAppConfig = {
    * or nowhere. The go-live checklist in the portal is built from this, so a
    * half-configured deployment says exactly what is missing instead of guessing.
    */
-  sources: Record<
-    | "phoneNumberId"
-    | "accessToken"
-    | "businessAccountId"
-    | "catalogId"
-    | "verifyToken"
-    | "appSecret"
-    | "counterNumber"
-    | "displayNumber",
-    "env" | "settings" | "none"
-  >;
+  sources: Record<ConfigField, "env" | "settings" | "none">;
+  /**
+   * True when one value comes from Vercel and the other from the settings
+   * table — the exact split that produced a dead token nobody could see: the
+   * portal showed a green "configured" and Meta answered error 190.
+   */
+  mixedSources: boolean;
+  /** Settings-table values that are overridden by an environment variable. */
+  shadowed: ConfigField[];
+  /**
+   * Which source wins. `auto` = Vercel env first (the historical behaviour),
+   * `settings` = the value saved in Admin → WhatsApp Business first. The switch
+   * exists because a stale variable in Vercel silently beat a good token saved
+   * in the portal, and the only symptom was Meta's "Authentication Error".
+   */
+  credentialMode: "auto" | "env" | "settings";
+};
+
+export const CONFIG_FIELDS = [
+  "phoneNumberId",
+  "accessToken",
+  "businessAccountId",
+  "catalogId",
+  "verifyToken",
+  "appSecret",
+  "counterNumber",
+  "displayNumber",
+] as const;
+
+export type ConfigField = (typeof CONFIG_FIELDS)[number];
+
+/** The variable each field is read from, for the go-live checklist. */
+export const CONFIG_ENV_KEYS: Record<ConfigField, string> = {
+  phoneNumberId: "WHATSAPP_PHONE_NUMBER_ID",
+  accessToken: "WHATSAPP_ACCESS_TOKEN",
+  businessAccountId: "WHATSAPP_BUSINESS_ACCOUNT_ID",
+  catalogId: "WHATSAPP_CATALOG_ID",
+  verifyToken: "WHATSAPP_VERIFY_TOKEN",
+  appSecret: "WHATSAPP_APP_SECRET",
+  counterNumber: "WHATSAPP_COUNTER_NUMBER",
+  displayNumber: "WHATSAPP_DISPLAY_NUMBER",
 };
 
 const GRAPH_BASE = "https://graph.facebook.com/v21.0";
 
+/** Normalise the stored credential mode. */
+export function credentialMode(value: string): "auto" | "env" | "settings" {
+  return value === "settings" || value === "env" ? value : "auto";
+}
+
+/** True when the resolved values come from more than one place. */
+function hasBothSources(sources: ("env" | "settings" | "none")[]): boolean {
+  const used = new Set(sources.filter((source) => source !== "none"));
+  return used.size > 1;
+}
+
 type Resolved = { value: string; source: "env" | "settings" | "none" };
 
-function resolve(envKey: string, setting: string): Resolved {
+/**
+ * Resolve one credential from the environment or the settings table.
+ *
+ * `mode` decides the winner. The loser is never thrown away: a settings value
+ * that an environment variable overrides is reported as `shadowed` so the
+ * portal can say "Vercel is sending a different token than the one saved here"
+ * instead of the owner debugging a green tick and a Meta 190.
+ */
+function resolve(
+  envKey: string,
+  setting: string,
+  mode: "auto" | "env" | "settings" = "auto",
+): Resolved & { shadowed: boolean } {
   const fromEnv = (process.env[envKey] ?? "").trim();
-  if (fromEnv) return { value: fromEnv, source: "env" };
   const trimmed = (setting ?? "").trim();
-  if (trimmed) return { value: trimmed, source: "settings" };
-  return { value: "", source: "none" };
+  const preferSettings = mode === "settings";
+  const envAllowed = mode !== "settings";
+
+  if (preferSettings && trimmed) {
+    return {
+      value: trimmed,
+      source: "settings",
+      shadowed: Boolean(fromEnv) && fromEnv !== trimmed,
+    };
+  }
+  if (envAllowed && fromEnv) {
+    return {
+      value: fromEnv,
+      source: "env",
+      shadowed: Boolean(trimmed) && trimmed !== fromEnv,
+    };
+  }
+  if (trimmed) return { value: trimmed, source: "settings", shadowed: false };
+  return { value: "", source: "none", shadowed: false };
+}
+
+/** Mask a credential for display: never more than the last four characters. */
+export function maskSecret(value: string): string {
+  const trimmed = (value ?? "").trim();
+  if (!trimmed) return "";
+  if (trimmed.length <= 4) return "••••";
+  return `••••${trimmed.slice(-4)}`;
 }
 
 /** Resolve the channel configuration. Environment variables win over settings. */
 export async function whatsappConfig(): Promise<WhatsAppConfig> {
   const settings = await getSettings();
   const value = (key: string) => settingValue(settings, key, "");
-  const phoneNumberId = resolve("WHATSAPP_PHONE_NUMBER_ID", value("whatsapp_phone_number_id"));
-  const accessToken = resolve("WHATSAPP_ACCESS_TOKEN", value("whatsapp_access_token"));
+  const mode = credentialMode(value("whatsapp_credential_mode"));
+  const phoneNumberId = resolve("WHATSAPP_PHONE_NUMBER_ID", value("whatsapp_phone_number_id"), mode);
+  const accessToken = resolve("WHATSAPP_ACCESS_TOKEN", value("whatsapp_access_token"), mode);
   const businessAccountId = resolve(
     "WHATSAPP_BUSINESS_ACCOUNT_ID",
     value("whatsapp_business_account_id"),
+    mode,
   );
-  const catalogId = resolve("WHATSAPP_CATALOG_ID", value("whatsapp_catalog_id"));
-  const verifyToken = resolve("WHATSAPP_VERIFY_TOKEN", value("whatsapp_verify_token"));
-  const appSecret = resolve("WHATSAPP_APP_SECRET", value("whatsapp_app_secret"));
-  const counterNumber = resolve("WHATSAPP_COUNTER_NUMBER", value("whatsapp_counter_number"));
-  const displayNumber = resolve("WHATSAPP_DISPLAY_NUMBER", value("whatsapp_display_number"));
+  const catalogId = resolve("WHATSAPP_CATALOG_ID", value("whatsapp_catalog_id"), mode);
+  const verifyToken = resolve("WHATSAPP_VERIFY_TOKEN", value("whatsapp_verify_token"), mode);
+  const appSecret = resolve("WHATSAPP_APP_SECRET", value("whatsapp_app_secret"), mode);
+  const counterNumber = resolve("WHATSAPP_COUNTER_NUMBER", value("whatsapp_counter_number"), mode);
+  const displayNumber = resolve("WHATSAPP_DISPLAY_NUMBER", value("whatsapp_display_number"), mode);
   const enabled = value("whatsapp_enabled") !== "0";
   const configured = Boolean(phoneNumberId.value && accessToken.value);
   return {
@@ -101,6 +180,27 @@ export async function whatsappConfig(): Promise<WhatsAppConfig> {
       counterNumber: counterNumber.source,
       displayNumber: displayNumber.source,
     },
+    credentialMode: mode,
+    mixedSources: hasBothSources([
+      phoneNumberId.source,
+      accessToken.source,
+      businessAccountId.source,
+      catalogId.source,
+    ]),
+    shadowed: (
+      [
+        ["phoneNumberId", phoneNumberId],
+        ["accessToken", accessToken],
+        ["businessAccountId", businessAccountId],
+        ["catalogId", catalogId],
+        ["verifyToken", verifyToken],
+        ["appSecret", appSecret],
+        ["counterNumber", counterNumber],
+        ["displayNumber", displayNumber],
+      ] as [ConfigField, { shadowed: boolean }][]
+    )
+      .filter(([, resolved]) => resolved.shadowed)
+      .map(([field]) => field),
   };
 }
 
@@ -552,4 +652,160 @@ export function whatsappChatLink(number: string, message?: string): string {
   if (!digits) return "";
   const query = message ? `?text=${encodeURIComponent(message)}` : "";
   return `https://wa.me/${digits}${query}`;
+}
+
+/**
+ * Discover the WhatsApp catalog id from Meta instead of hunting the UI.
+ *
+ * The catalog id is the one value in the whole setup that an owner cannot find
+ * by looking at the obvious screens: it is not on the API setup page, it is not
+ * the WABA id, and in Commerce Manager it appears only in the URL of a page you
+ * have to already be on. It *is* however an attribute of the business account,
+ * so the Graph API can simply answer the question once the token is valid:
+ *
+ *   GET /{WABA_ID}?fields=id,name,owner_business_info,product_catalogs
+ *
+ * This returns every catalog the token can see, which one is already connected
+ * to the business account, and a plain-English next step when there isn't one.
+ */
+export type CatalogDiscovery = {
+  ok: boolean;
+  configuredCatalogId: string | null;
+  businessAccountId: string | null;
+  businessAccountName: string | null;
+  catalogs: {
+    id: string;
+    name: string;
+    /** True when this is the catalog the business account already uses. */
+    connected: boolean;
+    source: "waba" | "business" | "owned";
+  }[];
+  suggestedCatalogId: string | null;
+  error?: string;
+  hint?: string;
+  setupSteps: string[];
+};
+
+type CatalogNode = { id?: string; name?: string; product_catalog?: { id?: string; name?: string }[] };
+
+function catalogsFrom(value: unknown): CatalogNode[] {
+  if (!value || typeof value !== "object") return [];
+  const node = value as { data?: unknown; product_catalogs?: unknown };
+  const list = Array.isArray(node.data)
+    ? node.data
+    : Array.isArray(node.product_catalogs)
+      ? (node.product_catalogs as { data?: unknown }).data
+      : node.product_catalogs;
+  if (!Array.isArray(list)) return [];
+  return list as CatalogNode[];
+}
+
+export async function discoverWhatsAppCatalog(): Promise<CatalogDiscovery> {
+  const config = await whatsappConfig();
+  const setupSteps = [
+    "Open business.facebook.com → All tools → Commerce Manager → Add catalog → name it “Khan Baba Menu”, choose Online products, currency AUD.",
+    "Still in Commerce Manager: Settings → Catalog ID is shown as Content ID. Or read the digits in the URL (/catalog/1234567890/products).",
+    "Go to WhatsApp Manager → Account tools → Catalog → Choose catalog → Connect catalog, and select the Khan Baba catalog.",
+    "Turn on “Show catalog icon in chat header” so customers can browse the menu in the chat.",
+    "Paste the Content ID into Admin → WhatsApp Business → WhatsApp Catalogue ID and save.",
+  ];
+
+  if (!config.configured) {
+    return {
+      ok: false,
+      configuredCatalogId: config.catalogId || null,
+      businessAccountId: config.businessAccountId || null,
+      businessAccountName: null,
+      catalogs: [],
+      suggestedCatalogId: null,
+      error: "WhatsApp is not configured yet.",
+      hint: "Add the phone number id and a valid access token first — the catalog lookup uses the same token.",
+      setupSteps,
+    };
+  }
+  if (!config.businessAccountId) {
+    return {
+      ok: false,
+      configuredCatalogId: config.catalogId || null,
+      businessAccountId: null,
+      businessAccountName: null,
+      catalogs: [],
+      suggestedCatalogId: null,
+      error: "No business account id (WABA id) is set.",
+      hint: "It is the “WhatsApp Business Account ID” on Meta → WhatsApp → API setup, next to the phone number id.",
+      setupSteps,
+    };
+  }
+
+  const found = new Map<string, CatalogDiscovery["catalogs"][number]>();
+  const add = (id: string | undefined, name: string | undefined, source: "waba" | "business" | "owned") => {
+    if (!id) return;
+    if (found.has(id)) return;
+    found.set(id, { id, name: name ?? "Untitled catalog", connected: false, source });
+  };
+
+  const waba = await getGraph(
+    config,
+    `${config.businessAccountId}?fields=id,name,product_catalogs`,
+  );
+  let businessAccountName: string | null = null;
+  if (waba.ok) {
+    businessAccountName = String(waba.data.name ?? "") || null;
+    for (const node of catalogsFrom(waba.data.product_catalogs)) {
+      add(node.id, node.name, "waba");
+    }
+  }
+
+  // A catalog already connected to the business account is the right answer,
+  // so prefer it over anything else the token can see.
+  const connected = await getGraph(config, `${config.businessAccountId}/product_catalogs?limit=25`);
+  if (connected.ok) {
+    for (const node of catalogsFrom(connected.data)) add(node.id, node.name, "waba");
+  }
+
+  if (waba.ok || connected.ok) {
+    if (config.catalogId) {
+      const existing = found.get(config.catalogId);
+      if (existing) existing.connected = true;
+    }
+  }
+
+  // Anything the configured catalog id points at is by definition the one in use.
+  if (config.catalogId && !found.has(config.catalogId)) {
+    add(config.catalogId, "Configured catalog", "owned");
+    const own = found.get(config.catalogId);
+    if (own) own.connected = true;
+  }
+
+  const catalogs = [...found.values()].sort(
+    (a, b) => Number(b.connected) - Number(a.connected) || a.name.localeCompare(b.name),
+  );
+  const suggested =
+    config.catalogId && catalogs.some((row) => row.id === config.catalogId)
+      ? config.catalogId
+      : (catalogs.find((row) => row.connected)?.id ?? catalogs[0]?.id ?? null);
+
+  if (!waba.ok && !connected.ok) {
+    return {
+      ok: false,
+      configuredCatalogId: config.catalogId || null,
+      businessAccountId: config.businessAccountId,
+      businessAccountName,
+      catalogs,
+      suggestedCatalogId: suggested,
+      error: waba.error ?? connected.error ?? "Meta rejected the lookup",
+      hint: whatsappErrorHint(waba.code, waba.subcode),
+      setupSteps,
+    };
+  }
+
+  return {
+    ok: true,
+    configuredCatalogId: config.catalogId || null,
+    businessAccountId: config.businessAccountId,
+    businessAccountName,
+    catalogs,
+    suggestedCatalogId: suggested,
+    setupSteps,
+  };
 }

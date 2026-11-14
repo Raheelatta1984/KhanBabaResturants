@@ -6,15 +6,18 @@ export const DEFAULT_COMMUNITY_AUTO_REPLY = "thank you we have got it booked";
 export const DEFAULT_SETTINGS: Record<string, string> = {
   restaurant_name: "Khan Baba Restaurant",
   restaurant_tagline: "Pakistani Cuisine — Same taste from Lahore to Sydney",
-  restaurant_phone: "02 9000 1234",
+  // The kitchen is in Whalan, Western Sydney. It was previously seeded as
+  // Pitt Street in the CBD, which put every delivery estimate 39 km east of
+  // the actual fryer.
+  restaurant_phone: "0461 382 923",
   restaurant_email: "hello@khanbabarestaurant.com.au",
-  restaurant_address: "Shop 4, 379 Pitt Street, Sydney NSW 2000",
-  restaurant_suburb: "Sydney",
-  restaurant_postcode: "2000",
+  restaurant_address: "1/53 Bulolo Dr, Whalan NSW 2770",
+  restaurant_suburb: "Whalan",
+  restaurant_postcode: "2770",
   restaurant_state: "NSW",
   restaurant_country: "AU",
-  restaurant_lat: "-33.8688",
-  restaurant_lng: "151.2093",
+  restaurant_lat: "-33.757",
+  restaurant_lng: "150.804",
   restaurant_hours:
     "Mon–Thu 11:00–22:00 · Fri–Sat 11:00–23:00 · Sun 11:00–22:00",
   timezone: "Australia/Sydney",
@@ -31,6 +34,10 @@ export const DEFAULT_SETTINGS: Record<string, string> = {
   delivery_min_order_cents: "2500",
   delivery_free_over_cents: "0",
   delivery_radius_km: "12",
+  // 0 = a postcode missing from the zone list is priced on the standard rate
+  // (safe while zones are being filled in). 1 = only published zones are
+  // served, and every other postcode is refused with a readable reason.
+  delivery_zones_strict: "0",
   delivery_prep_lead_minutes: "15",
   show_delivery_breakdown: "1",
   uber_pickup_notes: "Pick up from the counter, ask for the Khan Baba order.",
@@ -109,14 +116,19 @@ export const DEFAULT_SETTINGS: Record<string, string> = {
   // With no credentials the whole channel runs in a clearly-labelled sandbox
   // that logs every message to whatsapp_messages instead of calling Meta.
   whatsapp_enabled: "1",
+  // Which source wins for the credentials below. `auto` = a Vercel environment
+  // variable beats the portal value (the historical behaviour); `settings` =
+  // the portal value wins. A stale token in Vercel used to shadow a good one in
+  // the database and present only as Meta error 190.
+  whatsapp_credential_mode: "auto", // auto | env | settings
   whatsapp_phone_number_id: "",
   whatsapp_business_account_id: "",
   whatsapp_access_token: "",
   whatsapp_catalog_id: "",
   whatsapp_verify_token: "",
   whatsapp_app_secret: "",
-  whatsapp_counter_number: "", // staff number that receives new orders
-  whatsapp_display_number: "", // the public business number shown to customers
+  whatsapp_counter_number: "0461 382 923", // staff number that receives new orders
+  whatsapp_display_number: "+61410913853", // the public business number shown to customers
   whatsapp_currency: "AUD",
   whatsapp_publish_enabled: "1",
   whatsapp_notify_customer: "1",
@@ -125,6 +137,12 @@ export const DEFAULT_SETTINGS: Record<string, string> = {
   whatsapp_payment_message:
     "Your Khan Baba order is ready for payment. Tap the button to pay securely — the counter will send it to the kitchen the moment payment clears.",
   whatsapp_auto_confirm_paid: "0", // 1 = send straight to the kitchen once paid
+  // Marketing channels. Email magic links need an absolute URL, so the public
+  // base is configuration, not a guess: it is resolved from PUBLIC_BASE_URL,
+  // then Vercel's own production URL, then the request host.
+  instagram_enabled: "1",
+  social_daily_post_enabled: "1",
+  broadcast_optin_required: "1",
 
   // Central inventory. Stock counts are optional per dish; a tracked dish goes
   // unavailable (and is unpublished from WhatsApp) at zero.
