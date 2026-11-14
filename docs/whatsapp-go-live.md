@@ -187,18 +187,23 @@ Work down this list; each step is one click unless noted.
 
 1. **Admin → WhatsApp Business** — *Connection* should read **live credentials**, and the *Go-live
    variables* checklist should show all five as **Vercel env**.
-2. Press **Test message**. The exact text appears in *Message log*; the status becomes `sent` (not
-   `logged`) and the message arrives on the counter phone.
-3. Press **Publish whole menu** — `channel_publications` rows turn `published` and the catalogue shows
+2. Press **Check connection**. It reads the phone number object from Meta and answers with the verified
+   business name and display number — this proves the token and phone number id before a single message
+   is sent.
+3. In **Send a real WhatsApp test**, type the phone that should buzz and press **Send test message**.
+   The message log records `sent` with Meta's message id and the phone receives it within seconds.
+   (See the note below on why a brand-new number receives the `hello_world` template rather than your
+   text.)
+4. Press **Publish whole menu** — `channel_publications` rows turn `published` and the catalogue shows
    the dishes in Commerce Manager.
-4. From a phone that is allowed to message the number, send `menu` — the catalogue card comes back and a
+5. From a phone that is allowed to message the number, send `menu` — the catalogue card comes back and a
    conversation appears in *Conversations*.
-5. Send `1 chicken biryani` — a ticket is created with source `whatsapp`, and the counter phone is
+6. Send `1 chicken biryani` — a ticket is created with source `whatsapp`, and the counter phone is
    notified.
-6. On the counter board, accept the ticket and press **Send pay link**. The guest receives
+7. On the counter board, accept the ticket and press **Send pay link**. The guest receives
    `/pay/<token>`; pay with a test card; the counter then accepts the paid ticket and it goes to the
    kitchen.
-7. Set stock of any dish to `0` in the portal — the dish goes unavailable and the catalogue publishes it
+8. Set stock of any dish to `0` in the portal — the dish goes unavailable and the catalogue publishes it
    as out of stock.
 
 ## Step 11 — Message templates and the 24-hour window (know this before launch)
@@ -211,6 +216,31 @@ proactive messages (an order-ready nudge the next morning, a marketing broadcast
 **WhatsApp Manager → Message templates**, wait for approval, and send it with the template sender in
 `lib/whatsapp/client.ts`.
 
+### Why a first message to a customer is a template
+
+You cannot open a conversation with free text. If the customer has never messaged the business — or last
+messaged more than 24 hours ago — Meta rejects a plain text send with error **131047**, no matter how
+correct the credentials are.
+
+**Send a real WhatsApp test** therefore picks the right shape for you:
+
+- **Window open** (that number messaged the business in the last 24 hours) → your text is sent as typed.
+- **Window closed** → the pre-approved `hello_world` template is sent instead, which Meta permits at any
+  time. When the customer replies, the window opens and your own text works for the next 24 hours.
+
+For a branded first contact, create your own template (e.g. `order_ready`) in WhatsApp Manager, approve
+it, and pass `template` in the API call — the sender already supports it.
+
+### Development mode: only test recipients can receive
+
+A new Meta app is in **Development mode**, and in that mode WhatsApp will only deliver to numbers added
+as **test recipients** (WhatsApp Manager → API setup → *To* field, up to 5). Sending to any other number
+fails with error **131030**, even though the send looks correct. Add the customer's number there while
+testing, or complete **business verification** to message any number.
+
+Both failures are surfaced verbatim in the portal — the API returns Meta's error code plus a plain-English
+fix, and the message log stores the same text, so a failed test never looks like a success.
+
 ## Troubleshooting
 
 | Symptom                                            | Cause and fix                                                                                                              |
@@ -219,6 +249,9 @@ proactive messages (an order-ready nudge the next morning, a marketing broadcast
 | Meta webhook "Verify and save" fails                | `WHATSAPP_VERIFY_TOKEN` in Vercel differs from the form, or the deployment is not reachable yet. Try the `curl` in Step 6 first. |
 | Handshake succeeded but no messages arrive          | The **messages** field is not subscribed (Step 6.5), or the sender is not an allowed test recipient while in test mode.     |
 | `401` / `OAuthException` on send                    | The token expired (24-hour token instead of the System User token) or lacks `whatsapp_business_messaging`.                  |
+| `131030` — recipient not in allowed list            | The Meta app is in Development mode; add that number as a test recipient (max 5) or finish business verification.           |
+| `131047` — re-engagement message                    | Over 24 hours since the customer's last message. Use **Send a real WhatsApp test**, which sends an approved template instead. |
+| `132001` — template does not exist                  | The template name or language is wrong. The default is `hello_world` in `en_US`.                                            |
 | Messages send but the counter is never notified     | `WHATSAPP_COUNTER_NUMBER` is empty or in local format. Use E.164 digits, e.g. `+61412345678`.                              |
 | Catalogue publish fails with a permissions error    | `catalog_management` is missing from the token, or the catalogue is not connected to the WABA.                              |
 | Webhook deliveries rejected in the log              | `WHATSAPP_APP_SECRET` is wrong — copy it again from App settings → Basic.                                                   |
