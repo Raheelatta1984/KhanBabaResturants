@@ -4,7 +4,9 @@ A complete, dynamic replacement for the Khan Baba static Wix site: public orderi
 dine-in), table QR ordering with live progress, counter → kitchen → courier workflow, multi-provider delivery quotes
 (Uber Direct, DoorDash Drive and a verified own-driver fleet), driver onboarding, live delivery maps, ATO kilometre
 reports, customer/driver promotions, returns redirected to the community as first-comment-wins Facebook posts, a
-detached Square POS synchronisation bridge, manufacturing/costing, rule-based surcharges and a What's New release feed.
+detached Square POS synchronisation bridge, manufacturing/costing, rule-based surcharges, a What's New release feed,
+a WhatsApp Business ordering and catalogue channel, counter-only table settlement, feedback that becomes a Google
+review draft, and a Lahore cultural theme with a scheduled in-room music system.
 
 Next.js 15 (App Router) · React 19 · TypeScript · Postgres on Supabase · Supabase Storage for photos · self-hosted fonts · no third-party tracking.
 
@@ -26,7 +28,7 @@ No database handy? Everything can also run against **PGlite** (Postgres 17 compi
 
 ```bash
 DATABASE_URL=postgres://pglite/khanbaba npm run dev
-npm run test:pg        # the full data-layer suite, ~120 assertions, no server
+npm run test:pg        # the full data-layer suite, 281 assertions, no server
 ```
 
 ### Demo staff logins
@@ -60,7 +62,9 @@ Demo customer flows: `/table/T04` (table QR), `/menu` → checkout, `/order/KB-D
 (find an order from a code *or* a link), `/login` (sign in / create an account),
 `/account` (history, live orders, saved details), `/driver/apply` (driver onboarding),
 `/community` (meals for neighbours in need) and `/community/demo-community-offer`
-(first-comment-wins claim). The private driver portal link is generated in
+(first-comment-wins claim), `/music` (the room's music, requests and the sound switch),
+`/pay/demo-pay-kb-demo10` (the secure link a WhatsApp order receives) and
+`/feedback/demo-feedback-kb-demo08` (a settled table's feedback → Google review draft). The private driver portal link is generated in
 **Admin → Driver management** after approval; try `WELCOME10` at checkout.
 
 ### Users & access
@@ -126,7 +130,12 @@ Demo customer flows: `/table/T04` (table QR), `/menu` → checkout, `/order/KB-D
 - **Admin** — overview with revenue/COGS/margins, orders, menu onboarding (photo upload + video), reviews moderation,
   production & material costing, pricing rules and holiday calendar, **Promotions**, **Driver management** (verification,
   assignment, commission payout and ATO CSV), **Returns & community**, **Integrations (Square POS)**,
-  delivery/payment integration settings, table QR management, staff accounts and the What's New publisher.
+  delivery/payment integration settings, table QR management, staff accounts, the What's New publisher,
+  **WhatsApp Business**, **Music system**, **Feedback & Google** and the **Command centre** (`/admin/hub`, the page the
+  Khan Baba logo opens for admins and managers — every admin option on one screen).
+- **Music desk** (`/counter/music`, and the same studio in **Admin → Music system**): the live player with
+  stop / resume / replay / next, the day-by-time schedule, the library, guest requests awaiting approval and the
+  on-demand charge controls.
 
 ### Platform engine
 
@@ -193,6 +202,48 @@ Demo customer flows: `/table/T04` (table QR), `/menu` → checkout, `/order/KB-D
   via `GET /api/ops/square/cron` with `Authorization: Bearer $SQUARE_SYNC_SECRET`. Removing those files/tables leaves
   the ordering core untouched.
 
+### WhatsApp Business, dine-in settlement, feedback and the Lahore room
+
+- **WhatsApp as an ordering channel** (`lib/whatsapp/*`, `app/api/webhooks/whatsapp`). The portal publishes every
+  dish to the WhatsApp Business catalogue (`channel_publications` records the exact product payload, price, stock and
+  sandbox/live status), central stock in `menu_items.stock_qty` is decremented by orders and mirrored to WhatsApp, and
+  availability flips to sold out automatically at zero. A guest who messages the business number gets the catalogue
+  reply, can order in plain text, and the ticket lands in the portal as `source = 'whatsapp'`. Counter staff are
+  notified on WhatsApp; the counter accepts, sends the guest a secure payment link (`/pay/[token]`, one-time,
+  expiring), and once payment clears the same ticket is accepted and forwarded to the kitchen. With no Meta
+  credentials the channel runs in **sandbox**: every message is stored and shown in **Admin → WhatsApp Business** with
+  its exact body. Setup steps are in `.env.example`; the webhook verifies `X-Hub-Signature-256` whenever
+  `WHATSAPP_APP_SECRET` is set.
+- **Counter-only table settlement.** Dine-in and table orders never take payment upfront — the guest eats first.
+  The counter can **park** a bill (`orders.parked`, with who/when/why), the table page shows "settle at the counter",
+  and `settle-table` takes cash or card, stamps `paid_at`, closes the table and immediately mints the feedback link.
+  Online payment for these channels is coerced to `counter` server-side, so the rule cannot be bypassed from the
+  browser.
+- **Feedback → Google review draft** (`lib/feedback.ts`). Settlement (or any completed order) sends a two-tap
+  feedback link. The guest rates the meal, confirms party size and picks the dishes; the portal then prepares a Google
+  review draft containing the dish names **and their photos**, the headcount ("served 3 people"), the served cost
+  range and the bill range, ready for staff to copy or open straight into Google's own review page. Google forbids a
+  third party from posting a review in a guest's name, so the final publish is a one-tap hand-off — the draft, the
+  copy button and the tracking of draft → published → skipped all live in **Admin → Feedback & Google**.
+- **Lahore cultural theme.** `data-theme="lahore"` on `<html>` (set by the music player, or forced from
+  **Admin → Music system**) brings the deep-green/marigold palette, arched motifs and the low-volume room sound.
+  Every visitor — online or at a table — has a persistent sound switch, and the choice is remembered in
+  `localStorage`. Ambience never starts above 20/100 and staff cannot raise it past 60.
+- **Music system** (`lib/music.ts`). Tracks can be audio files or YouTube links and are tagged `music` or
+  `religious` (naat, tilawat, qawwali). Collections group tracks; schedules play a collection by **day of week and
+  time window** with priority (a Friday 17:00–20:00 religious collection beats the lunch service, and a window may
+  cross midnight). Counter and admin can stop, resume, replay the current track or skip to the next at any time; the
+  player is a singleton row so every device shows the same thing. Guests can **request a song** with a mandatory
+  link; requests wait for staff approval in `/music`, `/counter/music` and **Admin → Music system**, and an approved
+  request becomes a track in the "On demand" collection.
+- **On-demand music charging.** Each approved request can carry a charge from the predefined rules (base $5, peak
+  $8 between 18:00 and 21:30, both editable) or any amount staff choose — including **zero** to waive it. The charge
+  is posted to `orders.music_charge_cents`, printed on the bill and shown on the guest's own request card. Maximum
+  play time default 15 minutes, so one request cannot monopolise the room.
+- **Ordering encouragement, respectfully.** A table order triggers a one-time thank-you cue in the room. It is
+  suppressed for the whole duration of a religious collection — and while one is scheduled, the ambience channel stays
+  silent too. This is enforced in `lib/music.ts` and covered by the data-layer suite.
+
 ---
 
 ## Integrations
@@ -253,6 +304,22 @@ Page's `feed` field to `GET/POST /api/webhooks/facebook`. Without credentials th
 first-comment-wins flow is fully testable. The first matching comment receives the exact auto-reply
 `thank you we have got it booked`, the post is closed to further comments (or later comments are hidden), and the
 counter receives a zero-cost click & collect ticket.
+
+### WhatsApp Business
+
+The Cloud API boundary lives in `lib/whatsapp/client.ts`: configuration (environment wins over the settings saved in
+**Admin → WhatsApp Business**), text and call-to-action sends, catalogue publishing, webhook signature verification and
+the `whatsapp_messages` audit log. Nothing else in the app talks to Meta.
+
+1. Meta for Developers → your app → **WhatsApp → API setup**: copy the phone number id and a permanent access token
+   into `WHATSAPP_PHONE_NUMBER_ID` and `WHATSAPP_ACCESS_TOKEN`.
+2. Webhook URL `https://<your-domain>/api/webhooks/whatsapp`, verify token repeated in `WHATSAPP_VERIFY_TOKEN`,
+   subscribe to the **messages** field. Set `WHATSAPP_APP_SECRET` so every delivery is signature-checked.
+3. Commerce Manager → connect a catalogue, copy its id into `WHATSAPP_CATALOG_ID`, then press **Publish whole menu**
+   in **Admin → WhatsApp Business**.
+4. Put the counter's phone in `WHATSAPP_COUNTER_NUMBER` (or the settings field) — that is where new orders land.
+
+Without those values the channel is labelled **sandbox** and every message is captured in the portal instead.
 
 ### Maps and driver GPS
 
@@ -318,10 +385,14 @@ app/
   driver/apply/            staged driver onboarding
   driver/[token]/          signed driver portal (map, GPS, ledger, ATO CSV)
   table/[code]/            table QR ordering
+  music/                   the room's music, requests and the sound switch
+  pay/[token]/             the secure payment link sent over WhatsApp
+  feedback/[token]/        two-tap feedback → Google review draft
   whats-new/               public release feed
-  counter/ kitchen/ delivery/   staff portals
+  counter/ kitchen/ delivery/   staff portals (counter/music is the music desk)
   admin/                   admin console (menu, production, pricing, promotions,
-                           drivers, community, integrations, tables, staff…)
+                           drivers, community, integrations, tables, staff,
+                           whatsapp, music, feedback) + hub/ command centre
   api/                     quote, orders, driver/ops/community/payment/webhook routes
 components/                shared UI, cart, checkout, tracking, DeliveryMap,
                            DriverPortal, driver onboarding, portal forms
@@ -337,6 +408,10 @@ lib/
   community.ts             returns → Facebook posts → first-comment-wins claims
   promotions.ts            customer offers + driver rewards
   integrations/            detached Square POS bridge + Facebook Graph helpers
+  whatsapp/                Cloud API client, catalogue publishing, order intake
+  music.ts                 player singleton, schedules, religious rules, song charges
+  feedback.ts              feedback invites, party size, bill range, Google drafts
+  dine-in.ts               parking, counter settlement, table release
   production.ts            materials, recipes, batches, cost postings
   auth/                    sessions, password hashing, API guards
 middleware.ts              role-based portal protection
@@ -382,6 +457,7 @@ Facebook, photo storage and maps) degrades to a clearly-labelled sandbox, offlin
 | `PAYPAL_*`                                              | PayPal Orders v2 client, mode, webhook ID; hosted wallet checkout.                            |
 | `SQUARE_*`, `SQUARE_SYNC_SECRET`, `CRON_SECRET`         | Detached Square POS bridge and optional scheduled out-of-band sync authorisation.             |
 | `FACEBOOK_*`                                            | Facebook Page post/comment API, app-secret signatures and webhook verification.                |
+| `WHATSAPP_*`                                            | WhatsApp Business Cloud API: phone number id, token, catalogue id, verify token, app secret, staff number. |
 
 ## Deployment
 

@@ -5,6 +5,7 @@ import { getCustomerSession } from "@/lib/auth/customer";
 import { publicBaseUrl } from "@/lib/url";
 import type { Channel } from "@/lib/pricing";
 import { isPaymentOption } from "@/lib/payments";
+import { triggerTableEncouragement } from "@/lib/music";
 
 export const dynamic = "force-dynamic";
 
@@ -26,6 +27,7 @@ type Body = {
   promoCode?: string;
   deliveryLat?: number | null;
   deliveryLng?: number | null;
+  partySize?: number;
   items?: (CartLineInput & { spiceLevel?: string })[];
 };
 
@@ -79,6 +81,10 @@ export async function POST(request: Request) {
       deliveryLat: body.deliveryLat,
       deliveryLng: body.deliveryLng,
       customerId: session?.id ?? null,
+      // Source is derived from the channel, never trusted from the browser: a
+      // WhatsApp order is created by the webhook, not by an HTTP client here.
+      source: body.channel === "table" ? "table" : "web",
+      partySize: body.partySize,
       items: body.items.map((item) => ({
         itemId: Number(item.itemId),
         variantId: Number(item.variantId),
@@ -87,6 +93,13 @@ export async function POST(request: Request) {
         notes: item.notes ?? null,
       })),
     });
+
+    // A table order is the moment to encourage the room: the shared player
+    // acknowledges it with the low Lahore ambience — unless a religious
+    // collection is live, in which case it stays silent.
+    if (body.channel === "table") {
+      await triggerTableEncouragement(db, result.order.id, "table-order").catch(() => null);
+    }
 
     const trackingPath = result.trackingToken
       ? `/t/${result.trackingToken}`

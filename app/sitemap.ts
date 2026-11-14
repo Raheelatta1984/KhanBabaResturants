@@ -15,6 +15,7 @@ export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
     { url: `${base}/track`, lastModified: new Date(), priority: 0.7 },
     { url: `${base}/login`, lastModified: new Date(), priority: 0.5 },
     { url: `${base}/whats-new`, lastModified: new Date(), priority: 0.6 },
+    { url: `${base}/music`, lastModified: new Date(), priority: 0.6 },
     ...items.map((item) => ({
       url: `${base}/menu/${item.slug}`,
       lastModified: new Date(item.updated_at),

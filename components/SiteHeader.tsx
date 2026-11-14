@@ -10,6 +10,7 @@ import type { CustomerSession } from "@/lib/auth/customer";
 const LINKS = [
   { href: "/menu", label: "Menu" },
   { href: "/track", label: "Track order" },
+  { href: "/music", label: "Music" },
   { href: "/whats-new", label: "What's new" },
   { href: "/#story", label: "Our story" },
   { href: "/#visit", label: "Find us" },

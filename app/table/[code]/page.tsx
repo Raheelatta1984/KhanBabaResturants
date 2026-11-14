@@ -127,6 +127,7 @@ export default async function TableOrderPage({
             items={items}
             paymentMode={paymentMode}
             payAtCounterEnabled={settings.pay_at_counter_enabled === "1"}
+            payAtCounterOnly={settings.dine_in_pay_at_counter_only === "1"}
           />
         )}
       </div>

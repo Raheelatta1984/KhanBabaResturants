@@ -29,7 +29,9 @@ for path in / /menu /menu/chicken-biryani /whats-new /checkout /table/T04 /order
             /order/KB-DEMO07 /track /login /login?mode=signup /t/demo-kb-demo01-token \
             /api/orders/KB-DEMO01 /api/orders/KB-DEMO07 /community \
             /community/demo-community-offer /community/demo-community-claimed \
-            /driver/apply /api/community/offers \
+            /driver/apply /api/community/offers /music /pay/demo-pay-kb-demo10 \
+            /feedback/demo-feedback-kb-demo08 /api/music/now \
+            "/api/webhooks/whatsapp?hub.mode=subscribe&hub.verify_token=&hub.challenge=smoke" \
             /sitemap.xml /robots.txt /staff/login /api/health; do
   check "$path"
 done
@@ -158,7 +160,8 @@ code=$(curl -s -c "$JAR" -o /dev/null -w "%{http_code}" -X POST "$BASE/api/staff
 if [ "$code" = "200" ]; then echo "  ok   200 POST /api/staff/login"; else echo "  FAIL $code POST /api/staff/login"; fail=1; fi
 
 echo "Portals + admin console"
-for path in /counter /counter/customers /kitchen /delivery /admin /admin/orders /admin/menu /admin/menu/new /admin/reviews \
+for path in /counter /counter/customers /counter/music /kitchen /delivery /admin /admin/hub /admin/whatsapp \
+            /admin/music /admin/feedback /admin/orders /admin/menu /admin/menu/new /admin/reviews \
             /admin/production /admin/pricing /admin/promotions /admin/drivers /admin/community \
             /admin/integrations /admin/delivery /admin/tables /admin/staff /admin/whats-new; do
   check "$path" -b "$JAR"
@@ -202,6 +205,121 @@ check "/api/ops/drivers/ato-report?driver=1&fy=2026-27" -b "$JAR"
 EXPECT=201 check "/api/ops/promotions" -b "$JAR" -X POST -H 'content-type: application/json' \
   -d '{"action":"create","code":"SMOKE5","name":"Smoke test offer","audience":"customer","kind":"flat","value":500}'
 EXPECT=503 check "/api/ops/square/cron"
+
+echo "Lahore music system"
+NOW_JSON=$(curl -s "$BASE/api/music/now")
+if printf '%s' "$NOW_JSON" | grep -q '"enabled"'; then
+  echo "  ok   the shared player reports a snapshot"
+else
+  echo "  FAIL music snapshot: $NOW_JSON"
+  fail=1
+fi
+for action in pause resume replay next; do
+  code=$(curl -s -b "$JAR" -o /dev/null -w "%{http_code}" -X POST "$BASE/api/ops/music" \
+    -H 'content-type: application/json' -d "{\"action\":\"$action\"}")
+  if [ "$code" = "200" ]; then echo "  ok   200 music $action"; else echo "  FAIL $code music $action"; fail=1; fi
+done
+MUSIC_TRACK=$(curl -s -b "$JAR" -X POST "$BASE/api/ops/music" -H 'content-type: application/json' \
+  -d '{"action":"create-track","title":"Smoke track","url":"https://example.com/smoke.mp3","kind":"music","category":"ghazal"}')
+if printf '%s' "$MUSIC_TRACK" | grep -q '"ok":true'; then
+  echo "  ok   a track can be loaded from the counter/admin console"
+else
+  echo "  FAIL create track: $MUSIC_TRACK"
+  fail=1
+fi
+if curl -s -X POST "$BASE/api/music/request" -H 'content-type: application/json' \
+   -d '{"customerName":"Smoke Guest","title":"No link","url":"nope"}' | grep -q 'link to the song is required'; then
+  echo "  ok   a guest song request needs a URL"
+else
+  echo "  FAIL song request without a URL was accepted"
+  fail=1
+fi
+REQUEST_JSON=$(curl -s -X POST "$BASE/api/music/request" -H 'content-type: application/json' \
+  -d '{"customerName":"Smoke Guest","title":"Smoke request","url":"https://example.com/song.mp3","tableCode":"T04"}')
+if printf '%s' "$REQUEST_JSON" | grep -q '"ok":true'; then
+  echo "  ok   a guest song request lands pending for staff"
+else
+  echo "  FAIL guest song request: $REQUEST_JSON"
+  fail=1
+fi
+
+echo "WhatsApp Business (sandbox)"
+WA_TEST=$(curl -s -b "$JAR" -X POST "$BASE/api/ops/whatsapp" -H 'content-type: application/json' -d '{"action":"test","to":"+61400000000"}')
+if printf '%s' "$WA_TEST" | grep -q '"ok":true'; then
+  echo "  ok   sandbox test message logged"
+else
+  echo "  FAIL WhatsApp test message: $WA_TEST"
+  fail=1
+fi
+WA_SYNC=$(curl -s -b "$JAR" -X POST "$BASE/api/ops/whatsapp" -H 'content-type: application/json' -d '{"action":"sync"}')
+if printf '%s' "$WA_SYNC" | grep -q '"published"'; then
+  echo "  ok   the menu publishes to the WhatsApp catalogue (sandbox)"
+else
+  echo "  FAIL WhatsApp catalogue sync: $WA_SYNC"
+  fail=1
+fi
+WA_INBOUND=$(curl -s -X POST "$BASE/api/webhooks/whatsapp" -H 'content-type: application/json' \
+  -d '{"object":"whatsapp_business_account","entry":[{"changes":[{"field":"messages","value":{"contacts":[{"profile":{"name":"Smoke Wa"},"wa_id":"61400000999"}],"messages":[{"id":"wamid.smoke-1","from":"61400000999","type":"text","text":{"body":"1 chicken biryani table 4"}}]}}]}]}')
+WA_ORDER=$(printf '%s' "$WA_INBOUND" | grep -o '"orderCode":"[^"]*"' | head -1 | cut -d'"' -f4)
+if [ -n "$WA_ORDER" ]; then
+  echo "  ok   an inbound WhatsApp message created $WA_ORDER"
+  check "/order/$WA_ORDER"
+  PAY_CODE=$(curl -s -b "$JAR" -X POST "$BASE/api/ops/orders/$WA_ORDER" -H 'content-type: application/json' \
+    -d '{"action":"payment-link"}' | grep -o '"token":"[^"]*"' | head -1 | cut -d'"' -f4)
+  if [ -n "$PAY_CODE" ]; then
+    echo "  ok   a secure payment link was minted"
+    check "/pay/$PAY_CODE"
+    if curl -s -X POST "$BASE/api/pay/$PAY_CODE" -H 'content-type: application/json' \
+       -d '{"option":"card_visa"}' | grep -q '"paid":true'; then
+      echo "  ok   the guest pays through the link (sandbox gateway)"
+    else
+      echo "  FAIL payment through the link"
+      fail=1
+    fi
+    code=$(curl -s -b "$JAR" -o /dev/null -w "%{http_code}" -X POST "$BASE/api/ops/orders/$WA_ORDER" \
+      -H 'content-type: application/json' -d '{"action":"confirm"}')
+    if [ "$code" = "200" ]; then echo "  ok   the counter accepts the paid WhatsApp order"; else echo "  FAIL $code accept paid WhatsApp order"; fail=1; fi
+  else
+    echo "  FAIL no payment token: $WA_INBOUND"
+    fail=1
+  fi
+else
+  echo "  FAIL WhatsApp inbound did not create an order: $WA_INBOUND"
+  fail=1
+fi
+
+echo "Dine-in parking and counter settlement"
+code=$(curl -s -b "$JAR" -o /dev/null -w "%{http_code}" -X POST "$BASE/api/ops/orders/KB-DEMO09" \
+  -H 'content-type: application/json' -d '{"action":"park","reason":"Smoke test"}')
+if [ "$code" = "200" ]; then echo "  ok   a table bill can be parked"; else echo "  FAIL $code park table bill"; fail=1; fi
+SETTLE=$(curl -s -b "$JAR" -X POST "$BASE/api/ops/orders/KB-DEMO09" -H 'content-type: application/json' \
+  -d '{"action":"settle-table","method":"cash"}')
+if printf '%s' "$SETTLE" | grep -q '"feedbackUrl"'; then
+  echo "  ok   settling takes payment and prepares a feedback link"
+  FEEDBACK_TOKEN=$(printf '%s' "$SETTLE" | grep -o '/feedback/[^"]*' | head -1 | cut -d'/' -f3)
+  if [ -n "$FEEDBACK_TOKEN" ]; then
+    check "/feedback/$FEEDBACK_TOKEN"
+    if curl -s -X POST "$BASE/api/feedback/$FEEDBACK_TOKEN" -H 'content-type: application/json' \
+       -d '{"rating":5,"partySize":3,"highlights":["Chicken Biryani"],"comment":"Smoke test"}' | grep -q '"ok":true'; then
+      echo "  ok   guest feedback becomes a Google review draft"
+      check "/admin/feedback" -b "$JAR"
+    else
+      echo "  FAIL feedback submission"
+      fail=1
+    fi
+  fi
+else
+  echo "  FAIL settle table: $SETTLE"
+  fail=1
+fi
+WA_ACK=$(curl -s -b "$JAR" -X POST "$BASE/api/ops/feedback" -H 'content-type: application/json' \
+  -d '{"action":"invite","orderId":1,"channel":"link"}')
+if printf '%s' "$WA_ACK" | grep -q '"url"'; then
+  echo "  ok   a feedback link can be minted on demand"
+else
+  echo "  FAIL feedback invite: $WA_ACK"
+  fail=1
+fi
 
 echo "Returns → community in need"
 RETURN_JSON=$(curl -s -b "$JAR" -X POST "$BASE/api/ops/community" -H 'content-type: application/json' \

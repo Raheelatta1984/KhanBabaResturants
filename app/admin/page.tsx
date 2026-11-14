@@ -80,7 +80,10 @@ export default async function AdminOverviewPage() {
           <p>Live trading snapshot for {settings.restaurant_name}.</p>
         </div>
         <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-          <Link href="/admin/menu/new" className="btn btn-primary btn-sm">
+          <Link href="/admin/hub" className="btn btn-primary btn-sm">
+            <Icon name="layers" size={14} /> Command centre
+          </Link>
+          <Link href="/admin/menu/new" className="btn btn-outline btn-sm">
             <Icon name="plus" size={14} /> New dish
           </Link>
           <Link href="/admin/production" className="btn btn-outline btn-sm">

@@ -7,10 +7,12 @@ const GROUPS: { title: string; links: { href: string; label: string }[] }[] = [
   {
     title: "Operations",
     links: [
+      { href: "/admin/hub", label: "Command centre" },
       { href: "/admin", label: "Overview" },
       { href: "/admin/orders", label: "Orders" },
       { href: "/counter", label: "Counter portal" },
       { href: "/counter/customers", label: "Customers" },
+      { href: "/counter/music", label: "Counter music desk" },
       { href: "/kitchen", label: "Kitchen portal" },
       { href: "/delivery", label: "Delivery portal" },
       { href: "/admin/drivers", label: "Driver management" },
@@ -21,6 +23,9 @@ const GROUPS: { title: string; links: { href: string; label: string }[] }[] = [
     title: "Catalogue",
     links: [
       { href: "/admin/menu", label: "Menu & dishes" },
+      { href: "/admin/whatsapp", label: "WhatsApp Business" },
+      { href: "/admin/feedback", label: "Feedback & Google" },
+      { href: "/admin/music", label: "Music system" },
       { href: "/admin/reviews", label: "Reviews" },
       { href: "/admin/whats-new", label: "What's new" },
     ],

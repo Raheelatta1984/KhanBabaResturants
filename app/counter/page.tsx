@@ -17,6 +17,12 @@ import { ClaimLinkButton } from "@/components/portal/ClaimLinkButton";
 import { OpsButton } from "@/components/portal/OpsButton";
 import { Icon } from "@/components/Icon";
 import { StatusBadge } from "@/components/ui";
+import {
+  dineInStats,
+  parkedOrders,
+  paidAwaitingAcceptance,
+  tableBillsDue,
+} from "@/lib/dine-in";
 
 export const dynamic = "force-dynamic";
 
@@ -27,7 +33,17 @@ async function itemsFor(orderId: number) {
 export default async function CounterPage() {
   const session = await requireRole(["admin", "manager", "counter"]);
   const db = await getDb();
-  const [pending, kitchen, ready, stats, paidToday] = await Promise.all([
+  const [
+    pending,
+    kitchen,
+    ready,
+    stats,
+    paidToday,
+    parked,
+    paidReady,
+    dineIn,
+    musicPending,
+  ] = await Promise.all([
     listOrders(db, { status: ["pending_confirm"], limit: 20 }),
     listOrders(db, { status: ["confirmed", "preparing"], limit: 16 }),
     listOrders(db, { status: ["ready", "awaiting_collection"], limit: 16 }),
@@ -35,7 +51,12 @@ export default async function CounterPage() {
     db.one<{ total: number }>(
       "SELECT COALESCE(SUM(total_cents), 0) AS total FROM orders WHERE payment_status = 'paid' AND created_at::date = CURRENT_DATE",
     ),
+    parkedOrders(db),
+    paidAwaitingAcceptance(db),
+    dineInStats(db),
+    db.one<{ c: number }>("SELECT COUNT(*) AS c FROM music_requests WHERE status = 'pending'"),
   ]);
+  const tableDue = await tableBillsDue(db);
 
   return (
     <div className="portal">
@@ -57,6 +78,10 @@ export default async function CounterPage() {
             <Link href="/counter/customers" className="btn btn-ghost btn-sm">
               <Icon name="user" size={14} /> Customers
             </Link>
+            <Link href="/counter/music" className="btn btn-ghost btn-sm">
+              <Icon name="play" size={14} /> Music
+              {musicPending.c > 0 ? <span className="badge badge-amber" style={{ marginLeft: 6 }}>{musicPending.c}</span> : null}
+            </Link>
             <Link href="/delivery" className="btn btn-ghost btn-sm">
               Delivery desk
             </Link>
@@ -64,6 +89,16 @@ export default async function CounterPage() {
         </div>
 
         <div className="stat-grid">
+          <div className="stat-card">
+            <span>Paid — accept now</span>
+            <b style={{ color: paidReady.length > 0 ? "var(--green)" : undefined }}>{paidReady.length}</b>
+            <small>Payment cleared, kitchen waiting</small>
+          </div>
+          <div className="stat-card">
+            <span>Table bills parked</span>
+            <b style={{ color: parked.length > 0 ? "var(--accent)" : undefined }}>{parked.length}</b>
+            <small>{money(dineIn.dueCents)} due at the counter</small>
+          </div>
           <div className="stat-card">
             <span>Awaiting confirmation</span>
             <b
@@ -159,6 +194,10 @@ export default async function CounterPage() {
                                   : "Unpaid"
                               }
                             />
+                            {order.source === "whatsapp" ? (
+                              <span className="badge badge-green">WhatsApp</span>
+                            ) : null}
+                            {order.parked ? <span className="badge badge-amber">Parked</span> : null}
                           </div>
                           <div className="tiny muted" style={{ marginTop: 6 }}>
                             {order.customer_name}
@@ -220,6 +259,16 @@ export default async function CounterPage() {
                           hasEmail={Boolean(order.email)}
                         />
                         {order.payment_status !== "paid" ? (
+                          <OpsButton
+                            endpoint={`/api/ops/orders/${order.id}`}
+                            payload={{ action: "payment-link" }}
+                            className="btn btn-outline btn-sm"
+                            successMessage="Payment link sent on WhatsApp"
+                          >
+                            Send pay link
+                          </OpsButton>
+                        ) : null}
+                        {order.payment_status !== "paid" ? (
                           <>
                             <OpsButton
                               endpoint={`/api/ops/orders/${order.id}`}
@@ -256,6 +305,148 @@ export default async function CounterPage() {
             </div>
           )}
         </section>
+
+        {paidReady.length > 0 ? (
+          <section style={{ marginBottom: 30 }}>
+            <div
+              style={{
+                display: "flex",
+                justifyContent: "space-between",
+                alignItems: "center",
+                marginBottom: 12,
+              }}
+            >
+              <h2 style={{ fontSize: "1.25rem" }}>Paid — accept and send to kitchen</h2>
+              <span className="tiny muted">
+                WhatsApp orders whose payment landed. Accepting is what releases the ticket.
+              </span>
+            </div>
+            <div className="grid grid-2">
+              {paidReady.map((order) => (
+                <article key={order.id} className="panel" style={{ borderColor: "rgba(95,211,154,0.3)" }}>
+                  <div className="row" style={{ justifyContent: "space-between", gap: 10, flexWrap: "wrap" }}>
+                    <div>
+                      <div className="row" style={{ gap: 8, flexWrap: "wrap" }}>
+                        <b>{order.code}</b>
+                        <span className="badge">{CHANNEL_LABELS[order.channel]}</span>
+                        <StatusBadge status="paid" label="Paid" />
+                        {order.source === "whatsapp" ? <span className="badge badge-green">WhatsApp</span> : null}
+                      </div>
+                      <div className="tiny muted" style={{ marginTop: 6 }}>
+                        {order.customer_name} · {money(order.total_cents)} · {minutesSince(order.created_at)} min ago
+                      </div>
+                    </div>
+                    <div className="row" style={{ gap: 8, flexWrap: "wrap" }}>
+                      <ConfirmOrderButton orderId={order.id} code={order.code} />
+                      <OpsButton
+                        endpoint={`/api/ops/orders/${order.id}`}
+                        payload={{ action: "feedback-invite", channel: "link" }}
+                        className="btn btn-ghost btn-sm"
+                        successMessage="Feedback link ready"
+                      >
+                        Feedback link
+                      </OpsButton>
+                    </div>
+                  </div>
+                </article>
+              ))}
+            </div>
+          </section>
+        ) : null}
+
+        {(parked.length > 0 || tableDue.length > 0) ? (
+          <section style={{ marginBottom: 30 }}>
+            <div
+              style={{
+                display: "flex",
+                justifyContent: "space-between",
+                alignItems: "center",
+                marginBottom: 12,
+              }}
+            >
+              <h2 style={{ fontSize: "1.25rem" }}>Table &amp; dine-in bills</h2>
+              <span className="tiny muted">
+                Payment is taken at the counter after the meal. Parking keeps the bill open.
+              </span>
+            </div>
+            <div className="grid grid-2">
+              {[...parked, ...tableDue.filter((order) => !parked.some((held) => held.id === order.id))].map((order) => (
+                <article key={order.id} className="panel" style={{ borderColor: order.parked ? "rgba(243,171,63,0.3)" : undefined }}>
+                  <div className="row" style={{ justifyContent: "space-between", gap: 10, flexWrap: "wrap" }}>
+                    <div>
+                      <div className="row" style={{ gap: 8, flexWrap: "wrap" }}>
+                        <b>{order.code}</b>
+                        <span className="badge">{CHANNEL_LABELS[order.channel]}</span>
+                        <StatusBadge status={order.status} />
+                        {order.parked ? (
+                          <span className="badge badge-amber">Parked</span>
+                        ) : (
+                          <StatusBadge status={order.payment_status} label={order.payment_status === "paid" ? "Paid" : "Payment due"} />
+                        )}
+                      </div>
+                      <div className="tiny muted" style={{ marginTop: 6 }}>
+                        {order.customer_name}
+                        {order.table_id ? " · at the table" : ""} · {money(order.total_cents)}
+                        {order.party_size ? ` · ${order.party_size} guest(s)` : ""}
+                      </div>
+                    </div>
+                    <div className="row" style={{ gap: 6, flexWrap: "wrap" }}>
+                      {!order.parked ? (
+                        <OpsButton
+                          endpoint={`/api/ops/orders/${order.id}`}
+                          payload={{ action: "park", reason: "Guest finishing the meal" }}
+                          className="btn btn-outline btn-sm"
+                          successMessage="Parked"
+                        >
+                          Park bill
+                        </OpsButton>
+                      ) : null}
+                      {order.payment_status !== "paid" ? (
+                        <>
+                          <OpsButton
+                            endpoint={`/api/ops/orders/${order.id}`}
+                            payload={{ action: "payment-link" }}
+                            className="btn btn-outline btn-sm"
+                            successMessage="Payment link sent"
+                          >
+                            Pay link
+                          </OpsButton>
+                          <OpsButton
+                            endpoint={`/api/ops/orders/${order.id}`}
+                            payload={{ action: "settle-table", method: "cash" }}
+                            className="btn btn-green btn-sm"
+                            confirmMessage={`Settle ${order.code} for ${money(order.total_cents)} cash and close the table?`}
+                            successMessage="Settled"
+                          >
+                            Cash &amp; close
+                          </OpsButton>
+                          <OpsButton
+                            endpoint={`/api/ops/orders/${order.id}`}
+                            payload={{ action: "settle-table", method: "card" }}
+                            className="btn btn-primary btn-sm"
+                            confirmMessage={`Settle ${order.code} for ${money(order.total_cents)} by card and close the table?`}
+                            successMessage="Settled"
+                          >
+                            Card &amp; close
+                          </OpsButton>
+                        </>
+                      ) : (
+                        <OpsButton
+                          endpoint={`/api/ops/orders/${order.id}`}
+                          payload={{ action: "feedback-invite", channel: "whatsapp" }}
+                          className="btn btn-green btn-sm"
+                          successMessage="Feedback link sent"
+                        >
+                          Feedback
+                        </OpsButton>
+                      )}
+                    </div>
+                  </div>
+                </article>
+              ))}
+            </div>
+          </section>
+        ) : null}
 
         <section style={{ marginBottom: 30 }}>
           <div
