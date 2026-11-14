@@ -2,7 +2,9 @@ import Link from "next/link";
 import { requireRole } from "@/lib/auth/guard";
 import { getDb } from "@/lib/db";
 import { getLatestJob, getOrderItems, listOrders } from "@/lib/orders";
-import { uberConfigured } from "@/lib/delivery";
+import { configuredProviders, providerLabel, uberConfigured } from "@/lib/delivery";
+import { trackingSnapshot } from "@/lib/drivers";
+import { DeliveryMap } from "@/components/DeliveryMap";
 import { minutesSince } from "@/lib/time";
 import { money } from "@/lib/money";
 import { PortalNav } from "@/components/portal/PortalNav";
@@ -15,6 +17,8 @@ export const dynamic = "force-dynamic";
 
 const PROVIDER_LABEL: Record<string, string> = {
   uber_direct: "Uber Direct",
+  doordash_drive: "DoorDash Drive",
+  own_fleet: "Khan Baba drivers",
   simulated: "Local courier (sandbox)",
 };
 
@@ -22,7 +26,7 @@ export default async function DeliveryPage() {
   const session = await requireRole(["admin", "manager", "delivery"]);
   const db = await getDb();
 
-  const [awaitingDispatch, inTransit, pickups, completedToday, uberLive] =
+  const [awaitingDispatch, inTransit, pickups, completedToday, uberLive, partners] =
     await Promise.all([
       listOrders(db, { status: ["ready"], channel: "delivery", limit: 30 }),
       listOrders(db, { status: ["out_for_delivery"], limit: 30 }),
@@ -48,7 +52,22 @@ export default async function DeliveryPage() {
        ORDER BY o.completed_at DESC LIMIT 12`,
       ),
       uberConfigured(db),
+      configuredProviders(db),
     ]);
+  const mapOrder = inTransit[0];
+  const mapData = mapOrder
+    ? await trackingSnapshot(db, {
+        id: mapOrder.id,
+        code: mapOrder.code,
+        address: mapOrder.address,
+        suburb: mapOrder.suburb,
+        postcode: mapOrder.postcode,
+        delivery_lat: mapOrder.delivery_lat,
+        delivery_lng: mapOrder.delivery_lng,
+        dispatched_at: mapOrder.dispatched_at,
+        status: mapOrder.status,
+      })
+    : null;
 
   const marginToday = completedToday.reduce(
     (sum, row) => sum + (row.delivery_fee_cents - (row.cost_cents ?? 0)),
@@ -116,6 +135,33 @@ export default async function DeliveryPage() {
             <small>{completedToday.length} delivered</small>
           </div>
         </div>
+
+        {mapData && mapOrder ? (
+          <section className="panel" style={{ marginBottom: 24 }}>
+            <div className="panel-head">
+              <h3 style={{ fontSize: "1.05rem" }}>Live map · {mapOrder.code}</h3>
+              <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                <span className="badge badge-blue">
+                  {partners.length ? partners.map(providerLabel).join(" · ") : "sandbox courier"}
+                </span>
+                <Link href="/admin/drivers" className="btn btn-ghost btn-sm">
+                  Driver management
+                </Link>
+              </div>
+            </div>
+            <DeliveryMap
+              data={mapData}
+              title={`Tracking ${mapOrder.customer_name} · ${mapOrder.address ?? ""}`}
+              refreshUrl="/api/ops/tracking"
+            />
+            {inTransit.length > 1 ? (
+              <p className="tiny muted" style={{ marginTop: 10 }}>
+                Showing the newest of {inTransit.length} deliveries on the road.
+                Customers see the same live map on their tracking page.
+              </p>
+            ) : null}
+          </section>
+        ) : null}
 
         <section style={{ marginBottom: 30 }}>
           <div

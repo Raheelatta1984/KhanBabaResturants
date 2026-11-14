@@ -6,6 +6,9 @@ export type QuoteRequest = {
   dropoffSuburb?: string;
   dropoffPostcode?: string;
   dropoffNotes?: string;
+  /** Geocoded drop-off, when the customer has shared or entered coordinates. */
+  dropoffLat?: number | null;
+  dropoffLng?: number | null;
   orderValueCents: number;
   pickupReadyAt?: string;
 };
@@ -17,6 +20,8 @@ export type ProviderQuote = {
   etaMinutes: number;
   expiresAt: string;
   live: boolean;
+  /** Road distance used for our own-fleet pricing and ATO trip estimates. */
+  distanceKm?: number;
   fallbackReason?: string;
   raw?: unknown;
 };
@@ -30,6 +35,8 @@ export type DispatchRequest = {
   dropoffSuburb?: string;
   dropoffPostcode?: string;
   dropoffNotes?: string;
+  dropoffLat?: number | null;
+  dropoffLng?: number | null;
   manifest: { name: string; quantity: number }[];
 };
 
@@ -41,6 +48,8 @@ export type DispatchResult = {
   courierName?: string;
   courierPhone?: string;
   etaMinutes?: number;
+  /** Set by our own fleet: the approved driver who accepted the job. */
+  driverId?: number;
   raw?: unknown;
 };
 

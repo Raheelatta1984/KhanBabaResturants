@@ -1,8 +1,10 @@
 # Khan Baba — restaurant operating platform
 
 A complete, dynamic replacement for the Khan Baba static Wix site: public ordering (delivery, click & collect,
-dine-in), table QR ordering with live progress, counter → kitchen → courier workflow, Uber Direct delivery quotes,
-manufacturing/costing, rule-based surcharges and a What's New release feed.
+dine-in), table QR ordering with live progress, counter → kitchen → courier workflow, multi-provider delivery quotes
+(Uber Direct, DoorDash Drive and a verified own-driver fleet), driver onboarding, live delivery maps, ATO kilometre
+reports, customer/driver promotions, returns redirected to the community as first-comment-wins Facebook posts, a
+detached Square POS synchronisation bridge, manufacturing/costing, rule-based surcharges and a What's New release feed.
 
 Next.js 15 (App Router) · React 19 · TypeScript · Postgres on Supabase · Supabase Storage for photos · self-hosted fonts · no third-party tracking.
 
@@ -53,9 +55,13 @@ Same password, **`KhanBaba2026!`**:
 | Daniel Mercer     | `daniel@example.com` | Completed click & collect history   |
 
 Demo customer flows: `/table/T04` (table QR), `/menu` → checkout, `/order/KB-DEMO01`
-(live tracking by code), `/t/demo-kb-demo01-token` (the shareable link), `/track`
+(live tracking by code), `/order/KB-DEMO07` (own-fleet delivery with a live map),
+`/t/demo-kb-demo01-token` (the shareable link), `/track`
 (find an order from a code *or* a link), `/login` (sign in / create an account),
-`/account` (history, live orders, saved details).
+`/account` (history, live orders, saved details), `/driver/apply` (driver onboarding),
+`/community` (meals for neighbours in need) and `/community/demo-community-offer`
+(first-comment-wins claim). The private driver portal link is generated in
+**Admin → Driver management** after approval; try `WELCOME10` at checkout.
 
 ### Users & access
 
@@ -85,10 +91,12 @@ Demo customer flows: `/table/T04` (table QR), `/menu` → checkout, `/order/KB-D
 - **Dish pages** with photography, inline YouTube (privacy-enhanced `youtube-nocookie`), full ingredient and allergen
   lists, spice levels (blend / mild / hot / extra hot), container sizes (500 ml / 1000 ml and any custom size) and
   guest reviews.
-- **Cart + checkout** for delivery, click & collect or dine-in, with a live courier quote, transparent surcharge lines,
-  optional priority preparation and card or pay-at-counter payment.
+- **Cart + checkout** for delivery, click & collect or dine-in, with a live quote compared across Uber Direct,
+  DoorDash Drive and our own verified drivers, transparent surcharge lines, promotion codes, optional priority
+  preparation, a delivery map pin (latitude/longitude) and Visa / Mastercard / Amex / Afterpay / PayPal or
+  pay-at-counter payment.
 - **Live order tracking** (`/order/[code]`) polling every 6 seconds: percentage complete, per-item prep state, courier
-  details and full event log.
+  details, a shared SVG/OpenStreetMap live delivery map and the full event log.
 - **Table QR ordering** (`/table/[code]`): scan, order, counter confirms, kitchen cooks, guest watches progress.
 - **Optional customer accounts** (`/login`, `/account`): ordering never requires a login — browsing, table QR,
   counter walk-ins and the tracking link all work signed out. An account adds order history, one-tap reorder, a
@@ -100,6 +108,11 @@ Demo customer flows: `/table/T04` (table QR), `/menu` → checkout, `/order/KB-D
 - **One-time claim links** (`/claim/[token]`): for guest orders the counter can mint a single-use link that attaches
   the order to an account without a password. Only the SHA-256 of the token is stored, and it is redeemed on a button
   press so a mail-scanner prefetch cannot burn it.
+- **Driver onboarding** (`/driver/apply`): a four-step application with seven compliance checks, vehicle/licence
+  details, consent and an optional starting coordinate. Approval is impossible until every document is verified.
+- **Community meals** (`/community`, `/community/[token]`): untouched returns are offered free as click & collect
+  only. The first valid comment books the meal, receives the exact `thank you we have got it booked` auto-reply,
+  closes the post to further comments and creates a zero-cost counter ticket.
 
 ### Staff portals
 
@@ -108,30 +121,77 @@ Demo customer flows: `/table/T04` (table QR), `/menu` → checkout, `/order/KB-D
   linked to an account) at **Counter → Customers**.
 - **Kitchen display** — queue / on the fire / packed columns, per-item prep ticking (drives the customer percentage),
   bump-to-ready, elapsed timers, priority flags, plus the production panel for naan, roti and prep batches.
-- **Delivery desk** — re-quote at dispatch, see courier cost vs customer charge and margin, request the courier,
-  sync status, mark delivered, hand over pickups.
+- **Delivery desk** — re-quote at dispatch across every configured partner, see courier cost vs customer charge and
+  margin, request the courier, watch the live map, sync status, mark delivered, hand over pickups.
 - **Admin** — overview with revenue/COGS/margins, orders, menu onboarding (photo upload + video), reviews moderation,
-  production & material costing, pricing rules and holiday calendar, delivery/payment integration settings, table QR
-  management, staff accounts and the What's New publisher.
+  production & material costing, pricing rules and holiday calendar, **Promotions**, **Driver management** (verification,
+  assignment, commission payout and ATO CSV), **Returns & community**, **Integrations (Square POS)**,
+  delivery/payment integration settings, table QR management, staff accounts and the What's New publisher.
 
 ### Platform engine
 
 - **Pricing rule engine** (`lib/pricing.ts`): weekend %, public holiday %, priority/peak flat fees, channel scoping,
   minimum subtotals, time windows evaluated in `Australia/Sydney`. A public holiday replaces the weekend rate.
-- **Delivery quoting** (`lib/delivery/*`): Uber Direct OAuth + `/delivery_quotes` + `/deliveries` integration, with a
-  deterministic sandbox courier model as fallback. Quotes are HMAC-signed before checkout so the fee cannot be tampered
-  with; the restaurant margin is applied on top (`delivery_markup_percent` + minimum + rounding + cap).
+- **Delivery quoting** (`lib/delivery/*`): Uber Direct OAuth, DoorDash Drive JWT-signed quote/dispatch, own-fleet
+  distance-based quotes and a deterministic sandbox courier fallback. `auto` compares every configured partner by
+  cheapest or fastest; provider webhooks share one status mapper. Quotes are HMAC-signed before checkout so the fee
+  cannot be tampered with; the restaurant margin is applied on top.
 - **Manufacturing & costing** (`lib/production.ts`): materials with pack costs, recipes with material lines, production
   batches. Completing a batch consumes stock and **lodges a cost against every material used** (the `cost_postings`
   ledger), giving cost-per-portion and gross margin per dish.
-- **Payments** (`lib/payments.ts`): Stripe Checkout when configured (hosted, PCI-safe) or a sandbox gateway that
-  validates a demo card client-side and never transmits card numbers.
+- **Payments** (`lib/payments.ts`): Stripe Checkout hosts Visa, Mastercard, Amex and Afterpay/Clearpay; PayPal uses
+  Orders v2 with a capture/return webhook flow. With no credentials, every option runs through a clearly-labelled
+  sandbox gateway that never transmits card numbers.
+- **Promotions** (`lib/promotions.ts`): customer percent/flat/free-delivery discounts and driver bonuses/commission
+  uplifts. Codes are validated at quote time **and again at order creation**; redemptions are recorded atomically.
 - **Order state machine** (`lib/orders.ts`): pending → confirmed → preparing → ready → out for delivery/collection →
-  completed, with progress percentages, event log and refund handling on cancel.
+  completed, with progress percentages, discount/payment metadata, delivery coordinates, driver settlement on
+  successful hand-over, a live tracking snapshot, event log and refund handling on cancel. **No Square calls live here.**
 - **Auth**: scrypt password hashes, HMAC-signed HTTP-only session cookies, role-based middleware on every portal route.
   Staff and customer cookies are signed with the same secret but carry different `aud` claims, so one can never be
   replayed as the other. Customer sessions last 30 days; every query is scoped by the id inside the signed cookie,
   never by anything the browser sends.
+
+### ERP expansion
+
+- **DoorDash Drive as a second courier partner.** `lib/delivery/doordash.ts` signs short-lived JWTs, requests quotes,
+  dispatches with our order-scoped idempotency key and verifies webhook signatures. `auto` mode compares it with Uber
+  Direct and our own drivers (`cheapest` or `fastest`); staff can force one partner from **Admin → Delivery & payments**.
+- **Verified own-driver fleet.** `/driver/apply` collects identity, vehicle, licence, insurance, police check,
+  right-to-work, ABN and payout references. Every one of the seven documents must be marked verified before
+  **Admin → Driver management** can approve the driver. Approval issues a 180-day signed capability link to a private
+  portal with an active route, GPS sharing, a commission ledger and the ATO report.
+- **Commission only on success.** `settleDriverJob()` posts the per-delivery fee, percentage commission, active driver
+  bonus and an ATO trip row exactly once when a delivery completes. Payouts are recorded separately, so an unpaid
+  ledger cannot silently disappear.
+- **ATO kilometre history.** `lib/drivers.ts` captures the cents-per-km rate on each trip (2026-27 = 91c, 2025-26 and
+  2024-25 = 88c, 2023-24 = 85c, 2022-23 = 78c, 2021-22/2020-21 = 72c), applies the 5,000 business-km cap and
+  exports `ato-km-<driver>-<fy>.csv` from the driver portal or driver management. Rates are also editable in settings;
+  see the [ATO rate table](https://atotaxrates.info/tax-deductions/work-related-car-expenses/cents-per-kilometre/)
+  and the [2026-27 determination coverage](https://www.baronaccounting.com/post/ato-cents-per-kilometre-rate-2026-27).
+- **Live delivery maps.** `components/DeliveryMap.tsx` is a pure SVG component with optional OpenStreetMap raster
+  tiles and an offline grid fallback (`map_tile_provider = none`). The same snapshot powers the customer tracking
+  page, the delivery desk, the driver portal and `/api/ops/tracking`; no mapping SDK or API key is required.
+- **Coordinates with delivery addresses.** Checkout resolves latitude/longitude from the browser's geolocation or
+  Nominatim, with a deterministic server-side fallback. `orders.delivery_lat/lng` and `customers.address_lat/lng`
+  feed courier quotes, driver assignment, the map and kilometre logs.
+- **Returns → community in need.** `/admin/community` logs a return and publishes it as a Facebook Page post (or a
+  local sandbox preview). The **first** comment containing the configured keyword wins a free click & collect meal:
+  a conditional `UPDATE … WHERE status='posted' AND claimed_at IS NULL` makes the claim race-safe, the platform
+  auto-comments exactly `thank you we have got it booked`, the post is closed (or later comments hidden on Page API
+  versions without `comment_enabled`), and a zero-cost pickup ticket is created for the counter.
+- **Promotions for customers and driver partners.** `/admin/promotions` manages percent, flat, free-delivery, driver
+  bonus and commission-uplift campaigns with windows, usage caps, per-customer caps and channel scoping. Customer
+  codes appear at checkout; driver rewards post only on a successful delivery.
+- **More payment options.** Visa, Mastercard, American Express, Afterpay/Clearpay and PayPal are selectable at
+  checkout. Stripe or PayPal hosted checkout is used when credentials exist; every option is explicitly labelled
+  sandbox otherwise. The chosen option is persisted on the order and shown on tracking.
+- **Square POS: completely detached.** `lib/integrations/square.ts`, `app/api/ops/square/*`, the Square webhook, the
+  two `square_*` tables and the optional `item_variants.square_variation_id` column are the entire synchronisation
+  boundary. The bridge can push completed orders, import POS payments, map catalog variations and receive webhooks, but
+  `lib/orders.ts` contains **no Square import or call**. Run it manually from **Admin → Integrations** or out-of-band
+  via `GET /api/ops/square/cron` with `Authorization: Bearer $SQUARE_SYNC_SECRET`. Removing those files/tables leaves
+  the ordering core untouched.
 
 ---
 
@@ -143,7 +203,7 @@ Demo customer flows: `/table/T04` (table QR), `/menu` → checkout, `/order/KB-D
 2. Set `UBER_DIRECT_CLIENT_ID`, `UBER_DIRECT_CLIENT_SECRET`, `UBER_DIRECT_CUSTOMER_ID` (env preferred) or paste them in
    **Admin → Delivery & payments**.
 3. Point Uber's webhook at `POST /api/webhooks/uber` and set `UBER_WEBHOOK_SECRET`.
-4. Set **Courier provider** to `auto` (uses Uber when configured) or `uber`.
+4. Set **Courier provider** to `auto` (compares every configured partner) or `uber` to force Uber Direct.
 
 Without credentials the platform uses the sandbox courier: deterministic fees by address, 25–40 minute ETAs and status
 progression. The UI labels it "sandbox" everywhere so nobody mistakes it for a live quote.
@@ -156,7 +216,51 @@ exact margin on every job. Re-quoting at dispatch records the real cost, so any 
 
 Set `STRIPE_SECRET_KEY` (and `STRIPE_WEBHOOK_SECRET`) and choose **Stripe Checkout** in Admin → Delivery & payments.
 Customers are redirected to Stripe; the webhook at `POST /api/webhooks/stripe` marks the order paid. No card data is
-handled by this app. Without a key the sandbox gateway is used (test card `4242 4242 4242 4242`).
+handled by this app. Without a key the sandbox gateway is used (test card `4242 4242 4242 4242`). Stripe Checkout also
+serves the Afterpay/Clearpay option.
+
+### DoorDash Drive
+
+1. Create a DoorDash Drive developer app and copy the developer ID, key ID and signing secret into
+   `DOORDASH_DEVELOPER_ID`, `DOORDASH_KEY_ID` and `DOORDASH_SIGNING_SECRET` (or **Admin → Delivery & payments**).
+2. Set `DOORDASH_STORE_ID`, point the Drive webhook at `POST /api/webhooks/doordash` and set
+   `DOORDASH_WEBHOOK_SECRET`.
+3. Choose `auto` to let the quote engine compare DoorDash with Uber Direct and the own fleet, or force
+   `doordash` / `own_fleet` for troubleshooting.
+
+Quotes are signed with a short-lived JWT; dispatch uses an idempotent external delivery ID derived from the order code.
+Without credentials DoorDash is excluded from the comparison and every other partner keeps working.
+
+### PayPal and Afterpay
+
+Set `PAYPAL_CLIENT_ID`, `PAYPAL_CLIENT_SECRET`, `PAYPAL_MODE` and `PAYPAL_WEBHOOK_ID`, then point PayPal's webhook at
+`POST /api/webhooks/paypal`. PayPal uses Orders v2: the customer approves on PayPal, returns through
+`/api/payments/paypal/return`, and the capture/webhook marks the order paid. Afterpay/Clearpay needs no extra key — it
+is a Stripe Checkout payment method. Enable or disable each option with the `payment_methods` CSV setting.
+
+### Square POS (detached bridge)
+
+Set `SQUARE_ACCESS_TOKEN`, `SQUARE_LOCATION_ID`, `SQUARE_ENVIRONMENT` and `SQUARE_WEBHOOK_SIGNATURE_KEY` only if you
+want to synchronise POS/transaction data. Point Square's webhook at `POST /api/webhooks/square`. Use
+**Admin → Integrations → Run full sync**, or schedule `GET /api/ops/square/cron` with
+`Authorization: Bearer $SQUARE_SYNC_SECRET`. The bridge writes to `square_sync_records` and `square_transactions` only;
+it never participates in checkout, quoting, dispatch or order completion. Sandbox mirror mode needs no credentials.
+
+### Facebook Page (community meals)
+
+Set `FACEBOOK_PAGE_ID`, `FACEBOOK_PAGE_ACCESS_TOKEN`, `FACEBOOK_APP_SECRET` and `FACEBOOK_VERIFY_TOKEN`; subscribe the
+Page's `feed` field to `GET/POST /api/webhooks/facebook`. Without credentials the post is mirrored locally so the
+first-comment-wins flow is fully testable. The first matching comment receives the exact auto-reply
+`thank you we have got it booked`, the post is closed to further comments (or later comments are hidden), and the
+counter receives a zero-cost click & collect ticket.
+
+### Maps and driver GPS
+
+Maps need no key. The default `map_tile_provider = osm` loads OpenStreetMap raster tiles inside the SVG; `none`
+renders an offline grid for kiosks and locked-down networks. Checkout geocodes with Nominatim and falls back to a
+deterministic Sydney estimate on the server. Approved drivers share GPS from their signed portal link only while they
+turn location on for an active job (`/api/driver/location`). `Admin → Driver management` exposes the live map,
+verification checklist, commission ledger and ATO CSV.
 
 ---
 
@@ -208,26 +312,36 @@ Costs are reset each batch, never averaged, so you can see the impact of a suppl
 app/
   page.tsx                 marketing home (live dish data, QR, release feed)
   menu/                    dynamic menu + dish pages (reviews, video, options)
-  checkout/                delivery / pickup / dine-in checkout
-  order/[code]/            customer tracking
+  checkout/                delivery / pickup / dine-in checkout, promos, pay options
+  order/[code]/            customer tracking + live delivery map
+  community/               public community board + first-comment claim pages
+  driver/apply/            staged driver onboarding
+  driver/[token]/          signed driver portal (map, GPS, ledger, ATO CSV)
   table/[code]/            table QR ordering
   whats-new/               public release feed
   counter/ kitchen/ delivery/   staff portals
-  admin/                   admin console (menu, production, pricing, tables, staff…)
-  api/                     quote, orders, reviews, ops actions, uploads, webhooks
-components/                shared UI, cart, checkout, tracking, portal forms
+  admin/                   admin console (menu, production, pricing, promotions,
+                           drivers, community, integrations, tables, staff…)
+  api/                     quote, orders, driver/ops/community/payment/webhook routes
+components/                shared UI, cart, checkout, tracking, DeliveryMap,
+                           DriverPortal, driver onboarding, portal forms
 lib/
   db/                      schema.sql (Postgres), Supabase/pg driver, seed data
   media.ts                 upload driver: Supabase Storage / Vercel Blob / Google Drive / local disk
-  pricing.ts               rule engine
-  delivery/                Uber Direct + sandbox provider, margin pricing
-  payments.ts              Stripe / sandbox
-  orders.ts                order lifecycle, progress, courier dispatch
+  geo.ts                   haversine, road-km estimates, route interpolation, tiles
+  pricing.ts               rule engine + promotion adjustments
+  delivery/                Uber Direct, DoorDash Drive, own fleet, sandbox, status mapper
+  payments.ts              Stripe / PayPal / sandbox, payment option catalogue
+  orders.ts                order lifecycle, promos, coordinates, driver settlement
+  drivers.ts               onboarding, verification, GPS, commission, ATO reports
+  community.ts             returns → Facebook posts → first-comment-wins claims
+  promotions.ts            customer offers + driver rewards
+  integrations/            detached Square POS bridge + Facebook Graph helpers
   production.ts            materials, recipes, batches, cost postings
   auth/                    sessions, password hashing, API guards
 middleware.ts              role-based portal protection
 data/uploads/              local dish photos in dev only (gitignored)
-scripts/                   seed, what's-new generator, PGlite test harness
+scripts/                   seed, what's-new generator, PGlite + HTTP smoke tests
 ```
 
 ## Scripts
@@ -239,6 +353,8 @@ npm run start        # production server
 npm run seed         # migrate + seed the Supabase database (add -- --reset to wipe)
 npm run db:check     # dial the configured database and say exactly what is wrong
 npm run test:pg      # whole data layer against PGlite — no database needed
+npm run test:smoke   # HTTP smoke test against an already-running server
+npm run test         # typecheck + PGlite suite + smoke test
 npm run typecheck    # tsc --noEmit
 npm run schema:build # regenerate lib/db/schema.ts from schema.sql
 npm run whatsnew     # release-note helper (--publish writes to Postgres)
@@ -247,20 +363,25 @@ npm run whatsnew     # release-note helper (--publish writes to Postgres)
 ## Environment
 
 Copy `.env.example` to `.env.local`. `DATABASE_URL` is the only mandatory value; `SESSION_SECRET` and
-`PUBLIC_BASE_URL` are strongly recommended, and every integration (Uber Direct, Stripe, photo storage) degrades to a
-clearly-labelled sandbox or local mode without credentials.
+`PUBLIC_BASE_URL` are strongly recommended. Every integration (Uber Direct, DoorDash, Stripe, PayPal, Square,
+Facebook, photo storage and maps) degrades to a clearly-labelled sandbox, offline or local mode without credentials.
 
 | Variable                                                | Purpose                                                                                       |
 | ------------------------------------------------------- | --------------------------------------------------------------------------------------------- |
 | `DATABASE_URL`                                          | Supabase pooler string (host contains `pooler`, port `6543`). Required.                        |
 | `SUPABASE_URL`, `SUPABASE_SECRET_KEY`                   | Supabase Storage for dish photos (the default, durable driver).                               |
 | `SUPABASE_STORAGE_BUCKET`                               | Photo bucket, default `menu-photos` (created on first upload).                                |
-| `PUBLIC_BASE_URL`                                       | Canonical URL for QR codes, sitemap and payment redirects.                                    |
-| `SESSION_SECRET`                                        | Signs staff sessions and delivery quotes.                                                     |
+| `PUBLIC_BASE_URL`                                       | Canonical URL for QR codes, sitemap, payment redirects and community links.                   |
+| `SESSION_SECRET`                                        | Signs staff sessions, delivery quote tokens and driver capability links.                      |
 | `BLOB_READ_WRITE_TOKEN`                                 | Optional: Vercel Blob instead of Supabase Storage.                                            |
 | `GOOGLE_DRIVE_SERVICE_ACCOUNT_JSON`, `GOOGLE_DRIVE_FOLDER_ID` | Optional: Google Drive instead of Supabase Storage.                                     |
 | `MEDIA_DRIVER`                                          | `auto` (default) / `supabase` / `blob` / `gdrive` / `local`.                                  |
-| `UBER_DIRECT_*`, `STRIPE_*`                             | Live courier quotes and card payments.                                                        |
+| `UBER_DIRECT_*`, `UBER_WEBHOOK_SECRET`, `UBER_STORE_ID` | Uber Direct live courier quotes and status webhooks.                                         |
+| `DOORDASH_*`                                            | DoorDash Drive developer ID, JWT key/signing secret, store ID and webhook secret.             |
+| `STRIPE_*`                                              | Stripe Checkout for Visa, Mastercard, Amex and Afterpay/Clearpay + payment webhook.           |
+| `PAYPAL_*`                                              | PayPal Orders v2 client, mode, webhook ID; hosted wallet checkout.                            |
+| `SQUARE_*`, `SQUARE_SYNC_SECRET`, `CRON_SECRET`         | Detached Square POS bridge and optional scheduled out-of-band sync authorisation.             |
+| `FACEBOOK_*`                                            | Facebook Page post/comment API, app-secret signatures and webhook verification.                |
 
 ## Deployment
 
@@ -300,7 +421,7 @@ vercel --prod
 ```
 
 `vercel.json` pins the `syd1` region. The first request to any instance creates the schema (`CREATE TABLE IF NOT EXISTS`
-for all 23 tables, plus `ALTER TABLE … ADD COLUMN IF NOT EXISTS` for columns added to an existing table by a
+for all 36 tables, plus `ALTER TABLE … ADD COLUMN IF NOT EXISTS` for columns added to an existing table by a
 later release, so it doubles as the migration) and seeds the demo dataset exactly once — a Postgres advisory lock
 makes concurrent cold starts safe, so a fresh database never gets two menus. Nothing else to run: no migration command,
 no seed script in the build.
@@ -340,9 +461,10 @@ disk.
 curl -s https://your-domain/api/health | jq
 ```
 
-`GET /api/health` returns `{ ok, database: { configured, target }, counts, media }` — real row counts straight from
-Postgres (`menuItems`, `orders`, `staff`, `materials`…), which driver is storing photos, and `503` with the connection
-error when `DATABASE_URL` is missing or the branch is asleep/unreachable.
+`GET /api/health` returns `{ ok, storage, target, counts, media, warnings }` — real row counts straight from
+Postgres (`menuItems`, `orders`, `staff`, `drivers`, `promotions`, `communityOffers`, `squareTransactions`,
+`deliveryJobs`…), which driver is storing photos, and `503` with the connection error when `DATABASE_URL` is missing
+or the branch is asleep/unreachable.
 
 ### Troubleshooting: "Application error: a server-side exception has occurred"
 
@@ -376,7 +498,10 @@ npm run test:pg
 Boots PGlite, applies the schema and seed, then drives the app's own modules: all four order channels, counter →
 kitchen → ready, courier quote/re-quote/dispatch, cancel + refund, a production batch with stock draw-down and five
 cost postings, pricing rules with the holiday calendar, settings, reviews, reporting queries, transaction rollback and
-five concurrent order creations. CI runs it on every PR, plus a smoke test that builds and serves the app with
+five concurrent order creations. It also checks the ERP expansion: verified driver documents, the 91c/km ATO report
+and cap, GPS breadcrumbs for the live map, server-side promotion validation, every payment option, first-comment-wins
+community claims with the exact auto-reply and zero-cost ticket, and out-of-band Square sync leaving orders untouched.
+CI runs it on every PR, plus a smoke test that builds and serves the app with
 `DATABASE_URL=postgres://pglite/khanbaba`.
 
 ### Self-hosting
@@ -389,13 +514,21 @@ DATABASE_URL="postgresql://…-pooler…/khanbaba?sslmode=require" \
 ```
 
 Works on any Node 22 host (Fly.io, Railway, a VPS) — the database is remote, so the host needs no volume. Put it behind
-HTTPS and point both webhooks (`/api/webhooks/uber`, `/api/webhooks/stripe`) at it.
+HTTPS and point the enabled webhooks (`/api/webhooks/uber`, `/api/webhooks/doordash`, `/api/webhooks/stripe`,
+`/api/webhooks/paypal`, `/api/webhooks/square`, `/api/webhooks/facebook`) at it.
 
 ### Operational checklist
 
 - Update restaurant name, phone, email and address in **Admin → Pricing & holidays → Restaurant profile** (the seeded
   values are placeholders).
-- Add real Uber Direct and Stripe credentials, then switch providers in **Admin → Delivery & payments**.
+- Add real Uber Direct, DoorDash Drive, Stripe and PayPal credentials, then switch providers in
+  **Admin → Delivery & payments**. Enable the customer payment brands you actually accept.
+- Verify every driver's seven documents before approval, then send their private portal link from
+  **Admin → Driver management**. Download ATO CSVs before each tax return.
+- If you use Square POS, configure only the detached bridge in **Admin → Integrations** and secure the optional cron
+  endpoint with `SQUARE_SYNC_SECRET`. Never add Square calls to the order lifecycle.
+- Configure the Facebook Page's `feed` webhook and confirm the exact `thank you we have got it booked` auto-reply for
+  community returns.
 - Configure Supabase Storage (`SUPABASE_URL` + `SUPABASE_SECRET_KEY`) before adding dishes (see above).
 - Print table QR codes from **Admin → Tables & QR codes**.
 - Add a What's New entry for every release (`npm run whatsnew` or the admin publisher).
@@ -406,6 +539,6 @@ HTTPS and point both webhooks (`/api/webhooks/uber`, `/api/webhooks/stripe`) at 
 
 - Versioned SQL migrations (today's idempotent schema is the migration) for multi-venue.
 - Stripe Terminal for counter card payments.
-- SMS/email order notifications (currently in-page tracking).
+- SMS/email order notifications (currently in-page tracking and the live map).
 - Allergen filtering and dietary badges on the menu.
-- Courier provider abstraction for DoorDash Drive / Sherpa.
+- Additional courier partners behind the existing provider interface (e.g. Sherpa).

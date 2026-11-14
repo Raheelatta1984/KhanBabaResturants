@@ -1,5 +1,8 @@
 import { getDb, type Db } from "./db";
 
+/** The exact automatic Facebook comment requested for the first claim. */
+export const DEFAULT_COMMUNITY_AUTO_REPLY = "thank you we have got it booked";
+
 export const DEFAULT_SETTINGS: Record<string, string> = {
   restaurant_name: "Khan Baba Restaurant",
   restaurant_tagline: "Pakistani Cuisine — Same taste from Lahore to Sydney",
@@ -16,8 +19,11 @@ export const DEFAULT_SETTINGS: Record<string, string> = {
     "Mon–Thu 11:00–22:00 · Fri–Sat 11:00–23:00 · Sun 11:00–22:00",
   timezone: "Australia/Sydney",
 
-  // Delivery pricing (we quote Uber Direct live, then apply a service margin)
-  delivery_provider: "auto", // auto | uber | simulated
+  // Delivery pricing (we quote the courier partners live, then apply a margin)
+  // auto = cheapest live quote across every configured partner, plus our own
+  // verified drivers. Individual providers can be forced for troubleshooting.
+  delivery_provider: "auto", // auto | uber | doordash | own_fleet | simulated
+  delivery_quote_strategy: "cheapest", // cheapest | fastest
   delivery_markup_percent: "15",
   delivery_markup_min_cents: "100",
   delivery_rounding_cents: "50",
@@ -33,11 +39,55 @@ export const DEFAULT_SETTINGS: Record<string, string> = {
   uber_client_secret: "",
   uber_customer_id: "",
 
-  // Payments
-  payment_provider: "simulated", // simulated | stripe
+  // DoorDash Drive (second delivery partner; credentials are env-first)
+  doordash_developer_id: "",
+  doordash_key_id: "",
+  doordash_signing_secret: "",
+  doordash_store_id: "khan-baba-sydney",
+  doordash_webhook_secret: "",
+
+  // Our own verified driver fleet
+  own_fleet_enabled: "1",
+  own_fleet_base_fee_cents: "349",
+  own_fleet_per_km_cents: "185",
+  driver_commission_percent: "15",
+  driver_base_fee_cents: "300",
+  driver_tracking_interval_seconds: "15",
+  ato_cents_per_km_current: "91", // ATO 2026-27 determination (91c; 88c for 2025-26)
+  map_tile_provider: "osm", // osm | none — none keeps the map fully offline
+  driver_onboarding_enabled: "1",
+
+  // Payments — card brands, buy-now-pay-later and wallets are all opt-in.
+  payment_provider: "simulated", // simulated | stripe | auto
+  payment_methods: "card_visa,card_mastercard,card_amex,afterpay,paypal", // CSV, see PAYMENT_OPTIONS
   stripe_secret_key: "",
   stripe_webhook_secret: "",
+  paypal_client_id: "",
+  paypal_client_secret: "",
+  paypal_mode: "sandbox", // sandbox | live
+  paypal_webhook_id: "",
   gst_percent: "10",
+
+  // Square POS bridge — detached synchronisation, never a dependency of orders.
+  square_enabled: "1",
+  square_environment: "sandbox", // sandbox | production
+  square_access_token: "",
+  square_location_id: "",
+  square_webhook_signature_key: "",
+  square_sync_catalog: "0",
+
+  // Promotions
+  promotions_enabled: "1",
+
+  // Returns → community in need (Facebook post, first comment wins).
+  community_enabled: "1",
+  community_claim_keyword: "MINE",
+  community_auto_reply: DEFAULT_COMMUNITY_AUTO_REPLY,
+  community_facebook_page_id: "",
+  community_facebook_access_token: "",
+  community_facebook_app_secret: "",
+  community_facebook_verify_token: "",
+  community_pickup_hours: "Today, 5:00pm – 9:00pm",
 
   // Ordering
   min_order_cents: "0",

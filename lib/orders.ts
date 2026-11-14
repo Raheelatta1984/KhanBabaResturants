@@ -6,7 +6,7 @@ import {
   type PricingBreakdown,
   type DeliveryPricing,
 } from "./pricing";
-import { startCardPayment } from "./payments";
+import { startPayment, paymentOptionLabel } from "./payments";
 import { upsertGuestCustomer } from "./auth/customer";
 import { getSetting, getSettingNumber } from "./settings";
 import { addressHash, verifyQuote } from "./quotes";
@@ -14,7 +14,15 @@ import {
   quoteDelivery,
   dispatchWithProvider,
   providerStatus,
+  providerLabel,
 } from "./delivery";
+import {
+  validatePromotion,
+  recordPromotionRedemption,
+  PromotionError,
+} from "./promotions";
+import { trackingSnapshot, settleDriverJob } from "./drivers";
+import { coordinate, estimateCoordinates, SYDNEY_CBD } from "./geo";
 
 export class OrderError extends Error {
   status: number;
@@ -66,7 +74,14 @@ export type CreateOrderInput = {
   priority?: boolean;
   paymentMethod: "online" | "counter";
   paymentLast4?: string;
+  /** card_visa | card_mastercard | card_amex | afterpay | paypal */
+  paymentOption?: string;
   quoteToken?: string;
+  /** Geocoded drop-off. Resolved in the browser at checkout, corrected in admin. */
+  deliveryLat?: number | null;
+  deliveryLng?: number | null;
+  /** Customer promotion code — always re-validated server-side. */
+  promoCode?: string;
   /** Set by the ordering route from the signed-in customer cookie, never by the browser. */
   customerId?: number | null;
   items: CartLineInput[];
@@ -97,6 +112,11 @@ export type OrderRow = {
   payment_method: "online" | "counter";
   payment_status: "unpaid" | "pending" | "paid" | "refunded" | "failed";
   payment_ref: string | null;
+  payment_option: string | null;
+  discount_cents: number;
+  promotion_code: string | null;
+  delivery_lat: number | null;
+  delivery_lng: number | null;
   status: OrderStatus;
   progress: number;
   created_at: string;
@@ -138,6 +158,10 @@ export type DeliveryJobRow = {
   courier_phone: string | null;
   tracking_url: string | null;
   eta_minutes: number | null;
+  driver_id: number | null;
+  driver_fee_cents: number;
+  driver_settled_at: string | null;
+  distance_km: number | null;
   quote_json: string | null;
   external_status: string | null;
   triggered_by: string | null;
@@ -438,6 +462,30 @@ export async function createOrder(
     );
   }
 
+  // Delivery coordinates: trusted from the browser geocoder when present,
+  // otherwise a deterministic estimate so distance fees, maps and ATO trip logs
+  // always have a usable point. Staff can correct them in Admin → Orders.
+  const deliveryLat =
+    channel === "delivery"
+      ? (coordinate(input.deliveryLat) ??
+        estimateCoordinates(
+          input.address ?? "",
+          input.suburb ?? "",
+          input.postcode ?? "",
+          SYDNEY_CBD,
+        ).lat)
+      : null;
+  const deliveryLng =
+    channel === "delivery"
+      ? (coordinate(input.deliveryLng) ??
+        estimateCoordinates(
+          input.address ?? "",
+          input.suburb ?? "",
+          input.postcode ?? "",
+          SYDNEY_CBD,
+        ).lng)
+      : null;
+
   // Delivery fee: trust only a signed quote for this address, otherwise re-quote live.
   let delivery: DeliveryPricing | null = null;
   if (channel === "delivery") {
@@ -465,8 +513,27 @@ export async function createOrder(
         dropoffSuburb: input.suburb,
         dropoffPostcode: input.postcode,
         dropoffNotes: input.notes,
+        dropoffLat: deliveryLat,
+        dropoffLng: deliveryLng,
         orderValueCents: subtotal,
       });
+    }
+  }
+
+  // Promotions are validated again on the server — the checkout preview is
+  // only ever an estimate, and a forged discount must never reach the total.
+  let promotionCheck: Awaited<ReturnType<typeof validatePromotion>> | null = null;
+  if (input.promoCode?.trim()) {
+    try {
+      promotionCheck = await validatePromotion(db, input.promoCode, {
+        subtotalCents: subtotal,
+        channel,
+        deliveryFeeCents: delivery?.customerFeeCents ?? 0,
+        customerId: input.customerId ?? null,
+      });
+    } catch (error) {
+      if (error instanceof PromotionError) throw new OrderError(error.message);
+      throw error;
     }
   }
 
@@ -475,6 +542,8 @@ export async function createOrder(
     channel,
     priority: Boolean(input.priority),
     delivery,
+    discountCents: promotionCheck?.discountCents ?? 0,
+    promotionLabel: promotionCheck?.label,
   });
 
   if (channel === "delivery" && input.paymentMethod === "counter") {
@@ -525,9 +594,10 @@ export async function createOrder(
       `INSERT INTO orders (code, customer_id, tracking_token, channel, table_id, customer_name, phone, email,
         address, suburb, postcode, notes,
         subtotal_cents, surcharge_cents, surcharge_detail, priority, priority_fee_cents, delivery_fee_cents,
-        delivery_cost_cents, total_cents, payment_method, payment_status, status, progress, promised_at)
+        delivery_cost_cents, total_cents, payment_method, payment_status, status, progress, promised_at,
+        delivery_lat, delivery_lng, discount_cents, promotion_code, payment_option)
        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22,
-        'pending_confirm', 5, $23)
+        'pending_confirm', 5, $23, $24, $25, $26, $27, $28)
        RETURNING id`,
       [
         code,
@@ -553,6 +623,13 @@ export async function createOrder(
         input.paymentMethod,
         input.paymentMethod === "counter" ? "unpaid" : "pending",
         promisedAt,
+        deliveryLat,
+        deliveryLng,
+        pricing.discountCents,
+        promotionCheck?.promotion.code ?? null,
+        input.paymentMethod === "online"
+          ? (input.paymentOption ?? "card_visa")
+          : null,
       ],
     );
 
@@ -596,14 +673,36 @@ export async function createOrder(
     await db.query("UPDATE customers SET last_order_at = now() WHERE id = $1", [
       customerId,
     ]);
+    if (channel === "delivery" && deliveryLat && deliveryLng) {
+      await db.query(
+        "UPDATE customers SET address_lat = $1, address_lng = $2 WHERE id = $3 AND address_lat IS NULL",
+        [deliveryLat, deliveryLng, customerId],
+      );
+    }
+  }
+
+  if (promotionCheck) {
+    await recordPromotionRedemption(
+      db,
+      promotionCheck,
+      orderId,
+      customerId,
+    );
+    await addEvent(
+      db,
+      orderId,
+      "promotion",
+      `${promotionCheck.label} applied — ${(promotionCheck.discountCents / 100).toFixed(2)} off`,
+      "customer",
+    );
   }
 
   // Delivery job placeholder — the coordinator confirms the live quote at dispatch time.
   if (channel === "delivery" && delivery) {
     await db.query(
       `INSERT INTO delivery_jobs (order_id, provider, provider_quote_id, cost_cents, customer_fee_cents, markup_cents,
-        status, eta_minutes, quote_json)
-       VALUES ($1, $2, $3, $4, $5, $6, 'quoted', $7, $8)`,
+        status, eta_minutes, quote_json, distance_km)
+       VALUES ($1, $2, $3, $4, $5, $6, 'quoted', $7, $8, $9)`,
       [
         orderId,
         delivery.provider,
@@ -613,28 +712,35 @@ export async function createOrder(
         delivery.customerFeeCents - delivery.costCents,
         delivery.etaMinutes,
         JSON.stringify(delivery.raw ?? {}),
+        Number(
+          (delivery.raw as { distanceKm?: number } | undefined)?.distanceKm ?? 0,
+        ) || null,
       ],
     );
   }
 
   let redirectUrl: string | undefined;
   if (input.paymentMethod === "online") {
-    const payment = await startCardPayment({
+    const payment = await startPayment({
       orderCode: code,
       amountCents: pricing.totalCents,
       description: `Khan Baba order ${code}`,
       last4: input.paymentLast4,
       customerEmail: input.email,
+      option: (input.paymentOption ?? "card_visa") as Parameters<
+        typeof startPayment
+      >[0]["option"],
     });
     await db.query(
       `INSERT INTO payments (order_id, provider, intent_id, amount_cents, status, method, last4, raw)
-       VALUES ($1, $2, $3, $4, $5, 'card', $6, $7)`,
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
       [
         orderId,
         payment.provider,
         payment.intentId,
         pricing.totalCents,
         payment.status,
+        payment.method ?? "card",
         payment.last4 ?? null,
         JSON.stringify(payment.raw ?? {}),
       ],
@@ -875,6 +981,25 @@ export async function completeOrder(
     actor,
     100,
   );
+
+  // Post the driver's commission + ATO kilometre trip only on a successful
+  // delivery. Idempotent, so webhooks and status re-syncs cannot double-pay.
+  const job = await getLatestJob(db, orderId);
+  if (job?.status === "delivered" && job.driver_id) {
+    const settled = await settleDriverJob(db, job.id, actor);
+    if (settled)
+      await addEvent(
+        db,
+        orderId,
+        "driver_settled",
+        `Driver commission $${(settled.feeCents / 100).toFixed(2)} posted · ${settled.distanceKm} km logged for the ATO report`,
+        actor,
+      );
+  }
+
+  // NOTE: no Square calls here by design. The detached POS bridge discovers
+  // completed orders from its own sync tables (manual run, cron or webhook),
+  // so the ordering core has zero dependency on Square being available.
   return (await getOrderById(db, orderId))!;
 }
 
@@ -933,6 +1058,8 @@ export async function refreshDeliveryQuote(
     dropoffAddress: order.address ?? "",
     dropoffSuburb: order.suburb ?? undefined,
     dropoffPostcode: order.postcode ?? undefined,
+    dropoffLat: order.delivery_lat,
+    dropoffLng: order.delivery_lng,
     orderValueCents: order.subtotal_cents,
   });
 
@@ -991,7 +1118,8 @@ export async function refreshDeliveryQuote(
   ))!;
 }
 
-const STATUS_MAP: Record<string, string> = {
+export const STATUS_MAP: Record<string, string> = {
+  // Uber Direct
   accepted: "accepted",
   pickup: "pickup",
   pickup_complete: "pickup",
@@ -1001,7 +1129,24 @@ const STATUS_MAP: Record<string, string> = {
   canceled: "cancelled",
   cancelled: "cancelled",
   returned: "failed",
+  // DoorDash Drive
+  created: "requested",
+  confirmed: "accepted",
+  en_route_to_pickup: "accepted",
+  arrived_at_pickup: "pickup",
+  picked_up: "pickup",
+  en_route_to_dropoff: "dropoff",
+  arrived_at_dropoff: "dropoff",
+  completed: "delivered",
+  delivery: "delivered",
+  canceled_by_restaurant: "cancelled",
+  // Own fleet
+  assigned: "accepted",
 };
+
+export function mapProviderStatus(status: string): string {
+  return STATUS_MAP[String(status ?? "").toLowerCase()] ?? "requested";
+}
 
 /** Trigger the courier request — this is the action the delivery coordinator signs off. */
 export async function dispatchOrder(
@@ -1039,6 +1184,8 @@ export async function dispatchOrder(
     dropoffSuburb: order.suburb ?? undefined,
     dropoffPostcode: order.postcode ?? undefined,
     dropoffNotes: order.notes ?? undefined,
+    dropoffLat: order.delivery_lat,
+    dropoffLng: order.delivery_lng,
     manifest: items.map((item) => ({
       name: `${item.name} — ${item.variant_label}`,
       quantity: item.qty,
@@ -1047,16 +1194,19 @@ export async function dispatchOrder(
 
   await db.query(
     `UPDATE delivery_jobs SET provider_delivery_id = $1, status = $2, courier_name = $3, courier_phone = $4,
-      tracking_url = $5, eta_minutes = $6, triggered_by = $7, dispatched_at = now() WHERE id = $8`,
+      tracking_url = $5, eta_minutes = $6, triggered_by = $7, dispatched_at = now(),
+      driver_id = COALESCE($9, driver_id), distance_km = COALESCE($10, distance_km) WHERE id = $8`,
     [
       result.deliveryId,
-      STATUS_MAP[result.status] ?? "requested",
+      mapProviderStatus(result.status),
       result.courierName ?? null,
       result.courierPhone ?? null,
       result.trackingUrl ?? null,
       result.etaMinutes ?? job.eta_minutes,
       actor,
       job.id,
+      result.driverId ?? null,
+      (result.raw as { distance_km?: number } | undefined)?.distance_km ?? job.distance_km ?? null,
     ],
   );
 
@@ -1068,7 +1218,7 @@ export async function dispatchOrder(
     db,
     orderId,
     "dispatched",
-    `Delivery requested with ${job.provider === "uber_direct" ? "Uber Direct" : "our courier partner"}${result.courierName ? ` — ${result.courierName}` : ""}`,
+    `Delivery requested with ${providerLabel(job.provider)}${result.courierName ? ` — ${result.courierName}` : ""}${result.driverId ? " (own verified driver)" : ""}`,
     actor,
     92,
   );
@@ -1204,11 +1354,17 @@ export async function publicOrderPayload(db: Db, code: string) {
       surchargeCents: order.surcharge_cents,
       priorityFeeCents: order.priority_fee_cents,
       deliveryFeeCents: order.delivery_fee_cents,
+      discountCents: order.discount_cents ?? 0,
+      promotionCode: order.promotion_code ?? null,
+      paymentOption: order.payment_option ?? null,
+      paymentOptionLabel: paymentOptionLabel(order.payment_option),
       priority: Boolean(order.priority),
       customerName: order.customer_name,
       address: order.address,
       suburb: order.suburb,
       postcode: order.postcode,
+      deliveryLat: order.delivery_lat ?? null,
+      deliveryLng: order.delivery_lng ?? null,
       notes: order.notes,
       createdAt: order.created_at,
       confirmedAt: order.confirmed_at,
@@ -1238,13 +1394,30 @@ export async function publicOrderPayload(db: Db, code: string) {
     delivery: job
       ? {
           provider: job.provider,
+          providerLabel: providerLabel(job.provider),
           status: job.status,
           courierName: job.courier_name,
           courierPhone: job.courier_phone,
           trackingUrl: job.tracking_url,
           etaMinutes: job.eta_minutes,
+          driverCode: null,
         }
       : null,
+    /** Live map data for customers and staff: restaurant, driver, drop-off. */
+    tracking:
+      order.channel === "delivery"
+        ? await trackingSnapshot(db, {
+            id: order.id,
+            code: order.code,
+            address: order.address,
+            suburb: order.suburb,
+            postcode: order.postcode,
+            delivery_lat: order.delivery_lat,
+            delivery_lng: order.delivery_lng,
+            dispatched_at: order.dispatched_at,
+            status: order.status,
+          })
+        : null,
     table: table ? { code: table.code, name: table.name } : null,
     /** Present once the order row has one; the shareable link is derived from it. */
     trackingToken: order.tracking_token,

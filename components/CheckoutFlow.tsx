@@ -23,6 +23,7 @@ type Pricing = {
   surchargeCents: number;
   priorityFeeCents: number;
   deliveryFeeCents: number;
+  discountCents?: number;
   totalCents: number;
   priorityAvailable: boolean;
   priorityFeeCentsIfSelected: number;
@@ -44,8 +45,17 @@ type QuoteResponse = {
   pricing?: Pricing;
   quoteToken?: string;
   delivery?: DeliveryQuote | null;
+  promotion?: { code: string; label: string; discountCents: number } | null;
+  promotionError?: string | null;
   error?: string;
   addressRequired?: boolean;
+};
+
+export type CheckoutPaymentOption = {
+  id: string;
+  label: string;
+  blurb: string;
+  group: "card" | "bnpl" | "wallet";
 };
 
 type Channel = "delivery" | "pickup" | "dine_in";
@@ -99,11 +109,17 @@ export function CheckoutFlow({
   showDeliveryBreakdown,
   gstPercent,
   prefill,
+  paymentOptions = [],
+  liveGateways = [],
 }: {
   paymentMode: "simulated" | "stripe";
   payAtCounterEnabled: boolean;
   showDeliveryBreakdown: boolean;
   gstPercent: number;
+  /** Enabled card brands / Afterpay / PayPal from Admin → Delivery & payments. */
+  paymentOptions?: CheckoutPaymentOption[];
+  /** Gateways with real credentials configured, for the secure-checkout notice. */
+  liveGateways?: string[];
   /** Saved account details — checkout should feel like a confirmation, not a form. */
   prefill?: Prefill;
 }) {
@@ -120,6 +136,15 @@ export function CheckoutFlow({
   const [notes, setNotes] = useState("");
   const [priority, setPriority] = useState(false);
   const [paymentMethod, setPaymentMethod] = useState<"online" | "counter">("online");
+  const [paymentOption, setPaymentOption] = useState(
+    paymentOptions[0]?.id ?? "card_visa",
+  );
+  const [promoCode, setPromoCode] = useState("");
+  const [promotion, setPromotion] = useState<QuoteResponse["promotion"]>(null);
+  const [promotionError, setPromotionError] = useState<string | null>(null);
+  const [deliveryLat, setDeliveryLat] = useState<number | null>(null);
+  const [deliveryLng, setDeliveryLng] = useState<number | null>(null);
+  const [geoNote, setGeoNote] = useState("");
   const [cardNumber, setCardNumber] = useState("4242 4242 4242 4242");
   const [cardExpiry, setCardExpiry] = useState("12/34");
   const [cardCvc, setCardCvc] = useState("123");
@@ -159,6 +184,9 @@ export function CheckoutFlow({
           customerName: name,
           phone,
           notes,
+          promoCode: promoCode.trim() || undefined,
+          deliveryLat,
+          deliveryLng,
         }),
       });
       const data = (await response.json()) as QuoteResponse;
@@ -171,12 +199,14 @@ export function CheckoutFlow({
       if (data.pricing) setPricing(data.pricing);
       setDelivery(data.delivery ?? null);
       setQuoteToken(data.quoteToken);
+      setPromotion(data.promotion ?? null);
+      setPromotionError(data.promotionError ?? null);
     } catch {
       if (current === requestId.current) setQuoteError("Network problem — check your connection and try again.");
     } finally {
       if (current === requestId.current) setLoadingQuote(false);
     }
-  }, [items, channel, address, suburb, postcode, priority, name, phone, notes]);
+  }, [items, channel, address, suburb, postcode, priority, name, phone, notes, promoCode, deliveryLat, deliveryLng]);
 
   useEffect(() => {
     if (!hydrated || items.length === 0) return;
@@ -187,6 +217,57 @@ export function CheckoutFlow({
   useEffect(() => {
     if (channel === "delivery" && paymentMethod === "counter") setPaymentMethod("online");
   }, [channel, paymentMethod]);
+
+  /**
+   * Best-effort browser geocoding. The coordinates travel with the order so
+   * courier quotes, driver assignment, the live map and the ATO kilometre log
+   * all use the same point. If OpenStreetMap is unreachable the server falls
+   * back to a deterministic estimate and staff can correct it in admin.
+   */
+  useEffect(() => {
+    if (channel !== "delivery" || address.trim().length < 5) return;
+    let alive = true;
+    const timer = window.setTimeout(async () => {
+      const query = [address, suburb, postcode, "Australia"].filter(Boolean).join(", ");
+      try {
+        const res = await fetch(
+          `https://nominatim.openstreetmap.org/search?format=jsonv2&limit=1&q=${encodeURIComponent(query)}`,
+          { headers: { Accept: "application/json" } },
+        );
+        if (!res.ok) throw new Error("geocoder unavailable");
+        const rows = (await res.json()) as { lat: string; lon: string }[];
+        const lat = Number(rows[0]?.lat);
+        const lng = Number(rows[0]?.lon);
+        if (alive && Number.isFinite(lat) && Number.isFinite(lng)) {
+          setDeliveryLat(lat);
+          setDeliveryLng(lng);
+          setGeoNote("Address pin confirmed");
+        } else if (alive) setGeoNote("Using an approximate pin — we'll confirm at dispatch");
+      } catch {
+        if (alive) setGeoNote("Using an approximate pin — we'll confirm at dispatch");
+      }
+    }, 700);
+    return () => {
+      alive = false;
+      window.clearTimeout(timer);
+    };
+  }, [channel, address, suburb, postcode]);
+
+  function useMyLocation() {
+    if (!navigator.geolocation) {
+      setGeoNote("Location is not available in this browser");
+      return;
+    }
+    navigator.geolocation.getCurrentPosition(
+      (position) => {
+        setDeliveryLat(position.coords.latitude);
+        setDeliveryLng(position.coords.longitude);
+        setGeoNote("Using your device's location for the delivery pin");
+      },
+      () => setGeoNote("Location permission declined — address pin retained"),
+      { enableHighAccuracy: true, timeout: 8000 },
+    );
+  }
 
   const effectiveTotal = pricing?.totalCents ?? subtotalCents;
   const surchargeLines = pricing?.adjustments.filter((entry) => entry.kind === "weekend" || entry.kind === "public_holiday" || entry.kind === "priority" || entry.kind === "peak") ?? [];
@@ -203,7 +284,8 @@ export function CheckoutFlow({
       if (!delivery) return setError("We need a delivery quote before you can pay. Add your address above.");
       if (phone.replace(/\D/g, "").length < 8) return setError("A mobile number is required so the courier can reach you.");
     }
-    if (paymentMethod === "online" && paymentMode === "simulated") {
+    const isCardOption = paymentOption.startsWith("card_");
+    if (paymentMethod === "online" && paymentMode === "simulated" && isCardOption) {
       if (!luhnValid(cardNumber)) return setError("That card number does not look right (try 4242 4242 4242 4242).");
       if (!expiryValid(cardExpiry)) return setError("Enter the expiry as MM/YY, in the future.");
       if (!/^\d{3,4}$/.test(cardCvc)) return setError("Enter the 3 or 4 digit CVC.");
@@ -226,8 +308,12 @@ export function CheckoutFlow({
           notes,
           priority: priority && channel !== "dine_in",
           paymentMethod,
+          paymentOption: paymentMethod === "online" ? paymentOption : undefined,
           paymentLast4: paymentMethod === "online" ? cardNumber.replace(/\D/g, "").slice(-4) : undefined,
           quoteToken,
+          promoCode: promoCode.trim() || undefined,
+          deliveryLat,
+          deliveryLng,
           items: items.map((item) => ({
             itemId: item.itemId,
             variantId: item.variantId,
@@ -315,7 +401,7 @@ export function CheckoutFlow({
               {loadingQuote ? (
                 <div className="row">
                   <span className="muted">Requesting a live courier quote…</span>
-                  <span className="badge badge-amber">Uber Direct</span>
+                  <span className="badge badge-amber">Courier partners</span>
                 </div>
               ) : delivery ? (
                 <>
@@ -340,7 +426,9 @@ export function CheckoutFlow({
                     <span className="strong">{money(delivery.feeCents)}</span>
                   </div>
                   <p className="tiny" style={{ color: "var(--muted-2)", marginTop: 8 }}>
-                    {delivery.live ? "Live Uber Direct quote for this address." : "Estimated courier fee — confirmed at dispatch."}{" "}
+                    {delivery.live
+                      ? "Best live quote across our configured courier partners."
+                      : "Estimated courier fee — confirmed at dispatch."}{" "}
                     Held for 15 minutes. {delivery.fallbackReason ? "Live quote unavailable, using our rate card." : ""}
                   </p>
                 </>
@@ -422,6 +510,20 @@ export function CheckoutFlow({
                   <span className="label">Postcode</span>
                   <input className="input" value={postcode} onChange={(event) => setPostcode(event.target.value)} placeholder="2009" inputMode="numeric" maxLength={6} />
                 </div>
+                <div className="field full">
+                  <div className="row" style={{ gap: 10, flexWrap: "wrap" }}>
+                    <span className="tiny muted">
+                      <Icon name="pin" size={13} />{" "}
+                      {deliveryLat && deliveryLng
+                        ? `Delivery pin ${deliveryLat.toFixed(5)}, ${deliveryLng.toFixed(5)}`
+                        : "Resolving a map pin for the courier…"}
+                      {geoNote ? ` · ${geoNote}` : ""}
+                    </span>
+                    <button type="button" className="btn btn-ghost btn-sm" onClick={useMyLocation}>
+                      Use my location
+                    </button>
+                  </div>
+                </div>
               </>
             ) : null}
             <div className="field">
@@ -447,8 +549,8 @@ export function CheckoutFlow({
 
           <div className="pay-tabs">
             <button type="button" className="pay-tab" data-active={paymentMethod === "online" ? "true" : "false"} onClick={() => setPaymentMethod("online")}>
-              <b>Pay now by card</b>
-              <span>{paymentMode === "stripe" ? "Secure Stripe checkout" : "Sandbox card — no real charge"}</span>
+              <b>Pay now</b>
+              <span>Card, Afterpay or PayPal</span>
             </button>
             <button
               type="button"
@@ -470,39 +572,80 @@ export function CheckoutFlow({
                 Your order is sent to the counter for confirmation. Pay when you collect or when you finish your meal.
               </span>
             </div>
-          ) : paymentMode === "stripe" ? (
-            <div className="notice notice-green" style={{ marginTop: 14 }}>
-              <Icon name="shield" size={15} />
-              <span>You will be redirected to Stripe to complete payment securely. No card details touch our servers.</span>
-            </div>
           ) : (
             <>
-              <div className="notice" style={{ marginTop: 14 }}>
-                <Icon name="shield" size={15} />
-                <span>
-                  Payments are running in sandbox mode. Use the test card below — no money moves, no card data is stored.
-                </span>
+              <div className="pay-options">
+                {paymentOptions.map((option) => {
+                  const hosted =
+                    (option.group === "card" || option.id === "afterpay")
+                      ? paymentMode === "stripe"
+                      : liveGateways.includes("paypal");
+                  return (
+                    <button
+                      key={option.id}
+                      type="button"
+                      className="pay-option"
+                      data-active={paymentOption === option.id ? "true" : "false"}
+                      onClick={() => setPaymentOption(option.id)}
+                    >
+                      <b>{option.label}</b>
+                      <span>{option.blurb}</span>
+                      <small>{hosted ? "Secure hosted checkout" : "Sandbox — no real charge"}</small>
+                    </button>
+                  );
+                })}
               </div>
-              <div className="card-fields">
-                <div className="field">
-                  <span className="label">Card number</span>
-                  <input className="input" value={cardNumber} onChange={(event) => setCardNumber(event.target.value)} inputMode="numeric" autoComplete="off" />
+
+              {((paymentOption.startsWith("card_") && paymentMode === "stripe") ||
+                (paymentOption === "afterpay" && paymentMode === "stripe") ||
+                (paymentOption === "paypal" && liveGateways.includes("paypal"))) ? (
+                <div className="notice notice-green" style={{ marginTop: 14 }}>
+                  <Icon name="shield" size={15} />
+                  <span>
+                    You will be redirected to a secure hosted checkout. No card
+                    details touch our servers.
+                  </span>
                 </div>
-                <div className="row">
-                  <div className="field">
-                    <span className="label">Expiry (MM/YY)</span>
-                    <input className="input" value={cardExpiry} onChange={(event) => setCardExpiry(event.target.value)} placeholder="12/34" autoComplete="off" />
+              ) : paymentOption.startsWith("card_") ? (
+                <>
+                  <div className="notice" style={{ marginTop: 14 }}>
+                    <Icon name="shield" size={15} />
+                    <span>
+                      Payments are running in sandbox mode. Use the test card
+                      below — no money moves, no card data is stored.
+                    </span>
                   </div>
-                  <div className="field">
-                    <span className="label">CVC</span>
-                    <input className="input" value={cardCvc} onChange={(event) => setCardCvc(event.target.value)} inputMode="numeric" maxLength={4} autoComplete="off" />
+                  <div className="card-fields">
+                    <div className="field">
+                      <span className="label">Card number</span>
+                      <input className="input" value={cardNumber} onChange={(event) => setCardNumber(event.target.value)} inputMode="numeric" autoComplete="off" />
+                    </div>
+                    <div className="row">
+                      <div className="field">
+                        <span className="label">Expiry (MM/YY)</span>
+                        <input className="input" value={cardExpiry} onChange={(event) => setCardExpiry(event.target.value)} placeholder="12/34" autoComplete="off" />
+                      </div>
+                      <div className="field">
+                        <span className="label">CVC</span>
+                        <input className="input" value={cardCvc} onChange={(event) => setCardCvc(event.target.value)} inputMode="numeric" maxLength={4} autoComplete="off" />
+                      </div>
+                    </div>
+                    <div className="field">
+                      <span className="label">Name on card</span>
+                      <input className="input" value={cardName} onChange={(event) => setCardName(event.target.value)} placeholder="As printed" autoComplete="off" />
+                    </div>
                   </div>
+                </>
+              ) : (
+                <div className="notice" style={{ marginTop: 14 }}>
+                  <Icon name="shield" size={15} />
+                  <span>
+                    {paymentOption === "paypal" ? "PayPal" : "Afterpay"} is in
+                    sandbox mode — your order will be marked paid locally with no
+                    real charge.
+                  </span>
                 </div>
-                <div className="field">
-                  <span className="label">Name on card</span>
-                  <input className="input" value={cardName} onChange={(event) => setCardName(event.target.value)} placeholder="As printed" autoComplete="off" />
-                </div>
-              </div>
+              )}
             </>
           )}
 
@@ -562,6 +705,30 @@ export function CheckoutFlow({
             ))}
           </div>
 
+          <div className="promo-box">
+            <span className="label">Promotion code</span>
+            <div className="row" style={{ gap: 8, marginTop: 6 }}>
+              <input
+                className="input"
+                value={promoCode}
+                onChange={(event) => setPromoCode(event.target.value.toUpperCase())}
+                placeholder="e.g. WELCOME10"
+                maxLength={32}
+              />
+            </div>
+            {promotion ? (
+              <p className="tiny" style={{ color: "var(--green)", marginTop: 6 }}>
+                <Icon name="check" size={12} /> {promotion.label} — {money(promotion.discountCents)} off
+              </p>
+            ) : promotionError ? (
+              <p className="tiny" style={{ color: "var(--red)", marginTop: 6 }}>
+                {promotionError}
+              </p>
+            ) : promoCode ? (
+              <p className="tiny muted" style={{ marginTop: 6 }}>Checking code…</p>
+            ) : null}
+          </div>
+
           <div style={{ marginTop: 14 }}>
             <div className="summary-row">
               <span>Subtotal</span>
@@ -586,6 +753,16 @@ export function CheckoutFlow({
               <div className="summary-row">
                 <span>Delivery</span>
                 <b className="muted">Add address</b>
+              </div>
+            ) : null}
+            {pricing && pricing.discountCents && pricing.discountCents > 0 ? (
+              <div className="summary-row">
+                <span style={{ color: "var(--green)" }}>
+                  {promotion?.label ?? "Promotion"}
+                </span>
+                <b style={{ color: "var(--green)" }}>
+                  −{money(pricing.discountCents)}
+                </b>
               </div>
             ) : null}
             <div className="summary-total">

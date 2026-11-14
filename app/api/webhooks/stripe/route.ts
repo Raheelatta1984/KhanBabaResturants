@@ -26,6 +26,7 @@ export async function POST(request: Request) {
         id?: string;
         payment_status?: string;
         amount_total?: number;
+        metadata?: { order_code?: string; payment_option?: string };
       };
     };
   };
@@ -43,7 +44,7 @@ export async function POST(request: Request) {
   }
 
   const session = event.data?.object;
-  const code = session?.client_reference_id;
+  const code = session?.client_reference_id ?? session?.metadata?.order_code;
   if (!code)
     return NextResponse.json(
       { error: "Missing order reference" },
@@ -55,17 +56,20 @@ export async function POST(request: Request) {
   if (!order) return NextResponse.json({ ok: true, ignored: "unknown order" });
 
   if (order.payment_status !== "paid") {
+    const option = session?.metadata?.payment_option ?? "card";
     await db.query(
-      "UPDATE orders SET payment_status = 'paid', payment_ref = $1, updated_at = now() WHERE id = $2",
-      [session?.id ?? "stripe", order.id],
+      `UPDATE orders SET payment_status = 'paid', payment_ref = $1,
+        payment_option = COALESCE(payment_option, $3), updated_at = now() WHERE id = $2`,
+      [session?.id ?? "stripe", order.id, option],
     );
     await db.query(
       `INSERT INTO payments (order_id, provider, intent_id, amount_cents, status, method, raw, paid_at)
-       VALUES ($1, 'stripe', $2, $3, 'paid', 'card', $4, now())`,
+       VALUES ($1, 'stripe', $2, $3, 'paid', $4, $5, now())`,
       [
         order.id,
         session?.id ?? "stripe",
         order.total_cents,
+        option,
         JSON.stringify(session ?? {}),
       ],
     );
