@@ -4,6 +4,7 @@ import { createOrder, OrderError, type CartLineInput } from "@/lib/orders";
 import { getCustomerSession } from "@/lib/auth/customer";
 import { publicBaseUrl } from "@/lib/url";
 import type { Channel } from "@/lib/pricing";
+import { isPaymentOption } from "@/lib/payments";
 
 export const dynamic = "force-dynamic";
 
@@ -20,7 +21,11 @@ type Body = {
   priority?: boolean;
   paymentMethod?: "online" | "counter";
   paymentLast4?: string;
+  paymentOption?: string;
   quoteToken?: string;
+  promoCode?: string;
+  deliveryLat?: number | null;
+  deliveryLng?: number | null;
   items?: (CartLineInput & { spiceLevel?: string })[];
 };
 
@@ -43,6 +48,12 @@ export async function POST(request: Request) {
       { status: 400 },
     );
   }
+  if (body.paymentOption && !isPaymentOption(body.paymentOption)) {
+    return NextResponse.json(
+      { error: "Unknown payment option" },
+      { status: 400 },
+    );
+  }
 
   const db = await getDb();
   // The account comes from the signed cookie — never from the request body, or
@@ -62,7 +73,11 @@ export async function POST(request: Request) {
       priority: Boolean(body.priority),
       paymentMethod: body.paymentMethod ?? "online",
       paymentLast4: body.paymentLast4,
+      paymentOption: body.paymentOption,
       quoteToken: body.quoteToken,
+      promoCode: body.promoCode,
+      deliveryLat: body.deliveryLat,
+      deliveryLng: body.deliveryLng,
       customerId: session?.id ?? null,
       items: body.items.map((item) => ({
         itemId: Number(item.itemId),

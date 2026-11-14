@@ -13,6 +13,8 @@ const GROUPS: { title: string; links: { href: string; label: string }[] }[] = [
       { href: "/counter/customers", label: "Customers" },
       { href: "/kitchen", label: "Kitchen portal" },
       { href: "/delivery", label: "Delivery portal" },
+      { href: "/admin/drivers", label: "Driver management" },
+      { href: "/admin/community", label: "Returns & community" },
     ],
   },
   {
@@ -33,7 +35,9 @@ const GROUPS: { title: string; links: { href: string; label: string }[] }[] = [
     title: "Commercial",
     links: [
       { href: "/admin/pricing", label: "Pricing & holidays" },
+      { href: "/admin/promotions", label: "Promotions" },
       { href: "/admin/delivery", label: "Delivery & payments" },
+      { href: "/admin/integrations", label: "Integrations (Square POS)" },
       { href: "/admin/tables", label: "Tables & QR codes" },
       { href: "/admin/staff", label: "Users & access" },
     ],

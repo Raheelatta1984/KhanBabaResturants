@@ -6,6 +6,7 @@ import { money } from "@/lib/money";
 import { useCart } from "./CartProvider";
 import { Icon } from "./Icon";
 import { StatusBadge } from "./ui";
+import { DeliveryMap, type DeliveryMapData } from "./DeliveryMap";
 
 export type TrackPayload = {
   order: {
@@ -20,6 +21,10 @@ export type TrackPayload = {
     surchargeCents: number;
     priorityFeeCents: number;
     deliveryFeeCents: number;
+    discountCents?: number;
+    promotionCode?: string | null;
+    paymentOption?: string | null;
+    paymentOptionLabel?: string;
     priority: boolean;
     customerName: string;
     address: string | null;
@@ -47,6 +52,7 @@ export type TrackPayload = {
   events: { id: number; message: string; actor: string | null; progress: number | null; createdAt: string }[];
   delivery: {
     provider: string;
+    providerLabel?: string;
     status: string;
     courierName: string | null;
     courierPhone: string | null;
@@ -54,6 +60,7 @@ export type TrackPayload = {
     etaMinutes: number | null;
   } | null;
   table: { code: string; name: string } | null;
+  tracking?: DeliveryMapData | null;
 };
 
 const CHANNEL_LABEL: Record<string, string> = {
@@ -241,6 +248,14 @@ export function TrackingView({ initial, justPlaced }: { initial: TrackPayload; j
           </div>
         </div>
 
+        {isDelivery && data.tracking && !["cancelled", "completed"].includes(order.status) ? (
+          <DeliveryMap
+            data={data.tracking}
+            title="Follow your delivery"
+            refreshUrl={`/api/orders/${encodeURIComponent(order.code)}`}
+          />
+        ) : null}
+
         <div className="panel">
           <div className="panel-head">
             <h3>Items in this order</h3>
@@ -319,6 +334,14 @@ export function TrackingView({ initial, justPlaced }: { initial: TrackPayload; j
               <b>{money(order.deliveryFeeCents)}</b>
             </div>
           ) : null}
+          {order.discountCents && order.discountCents > 0 ? (
+            <div className="summary-row">
+              <span style={{ color: "var(--green)" }}>
+                Promotion {order.promotionCode ? `(${order.promotionCode})` : ""}
+              </span>
+              <b style={{ color: "var(--green)" }}>−{money(order.discountCents)}</b>
+            </div>
+          ) : null}
           <div className="summary-total">
             <span>Total</span>
             <b>{money(order.totalCents)}</b>
@@ -353,7 +376,10 @@ export function TrackingView({ initial, justPlaced }: { initial: TrackPayload; j
               </div>
             ) : null}
             <p className="tiny" style={{ color: "var(--muted-2)", marginTop: 12 }}>
-              Delivered by {data.delivery?.provider === "uber_direct" ? "Uber Direct" : "our local courier partner"}.
+              Delivered by {data.delivery?.providerLabel ?? "our delivery partner"}.
+              {order.paymentOptionLabel && order.paymentMethod === "online"
+                ? ` Paid with ${order.paymentOptionLabel}.`
+                : ""}
             </p>
           </div>
         ) : null}

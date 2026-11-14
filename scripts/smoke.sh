@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
 # Route smoke test: boots nothing, assumes a server is already listening on $BASE.
 # Logs in as the demo admin and checks that every page renders (HTTP 200) and the
-# key JSON endpoints answer. Run by CI after `npm run build && npm run start`.
+# key JSON endpoints answer — including promotions, driver onboarding, live maps,
+# ATO CSV, community claims, the detached Square bridge and the new admin pages.
+# Run by CI after `npm run build && npm run start`.
 # It ends by retiring the demo credentials, so run it once against a fresh database.
 set -euo pipefail
 
@@ -24,7 +26,10 @@ check() {
 
 echo "Public pages"
 for path in / /menu /menu/chicken-biryani /whats-new /checkout /table/T04 /order/KB-DEMO01 \
-            /track /login /login?mode=signup /t/demo-kb-demo01-token /api/orders/KB-DEMO01 \
+            /order/KB-DEMO07 /track /login /login?mode=signup /t/demo-kb-demo01-token \
+            /api/orders/KB-DEMO01 /api/orders/KB-DEMO07 /community \
+            /community/demo-community-offer /community/demo-community-claimed \
+            /driver/apply /api/community/offers \
             /sitemap.xml /robots.txt /staff/login /api/health; do
   check "$path"
 done
@@ -35,6 +40,48 @@ EXPECT=404 check "/t/definitely-not-a-real-token"
 echo "Order intake"
 check "/api/quote" -X POST -H 'content-type: application/json' \
   -d '{"channel":"pickup","items":[{"variantId":1,"qty":1}]}'
+
+echo "Promotion preview, delivery coordinates and payment options"
+PROMO_QUOTE=$(curl -s -X POST "$BASE/api/quote" -H 'content-type: application/json' \
+  -d '{"channel":"pickup","items":[{"variantId":1,"qty":2}],"promoCode":"WELCOME10"}')
+if printf '%s' "$PROMO_QUOTE" | grep -q '"code":"WELCOME10"'; then
+  echo "  ok   WELCOME10 previewed and re-validated on the server"
+else
+  echo "  FAIL promotion preview: $PROMO_QUOTE"
+  fail=1
+fi
+DELIVERY_QUOTE=$(curl -s -X POST "$BASE/api/quote" -H 'content-type: application/json' \
+  -d '{"channel":"delivery","address":"1 Test Street","suburb":"Sydney","postcode":"2000","deliveryLat":-33.8711,"deliveryLng":151.2063,"items":[{"variantId":1,"qty":3}]}')
+QUOTE_TOKEN=$(printf '%s' "$DELIVERY_QUOTE" | grep -o '"quoteToken":"[^"]*"' | head -1 | cut -d'"' -f4)
+if [ -n "$QUOTE_TOKEN" ]; then
+  echo "  ok   delivery quote carries a signed token"
+else
+  echo "  FAIL delivery quote token: $DELIVERY_QUOTE"
+  fail=1
+fi
+PROMO_ORDER_JSON=$(curl -s -X POST "$BASE/api/orders" -H 'content-type: application/json' \
+  -d "{\"channel\":\"delivery\",\"customerName\":\"Promo Smoke\",\"phone\":\"0400000001\",\"email\":\"promo@example.com\",\"address\":\"1 Test Street\",\"suburb\":\"Sydney\",\"postcode\":\"2000\",\"deliveryLat\":-33.8711,\"deliveryLng\":151.2063,\"paymentMethod\":\"online\",\"paymentOption\":\"card_visa\",\"paymentLast4\":\"4242\",\"promoCode\":\"WELCOME10\",\"quoteToken\":\"$QUOTE_TOKEN\",\"items\":[{\"itemId\":1,\"variantId\":1,\"qty\":3}]}")
+PROMO_ORDER_CODE=$(printf '%s' "$PROMO_ORDER_JSON" | sed -n 's/.*"code":"\([^"]*\)".*/\1/p')
+if [ -n "$PROMO_ORDER_CODE" ] && \
+   curl -s "$BASE/api/orders/$PROMO_ORDER_CODE" | grep -q '"promotionCode":"WELCOME10"' && \
+   curl -s "$BASE/api/orders/$PROMO_ORDER_CODE" | grep -q '"paymentOptionLabel":"Visa"' && \
+   curl -s "$BASE/api/orders/$PROMO_ORDER_CODE" | grep -q '"deliveryLat":-33.8711'; then
+  echo "  ok   promo, option and latitude/longitude persisted on the order"
+  check "/order/$PROMO_ORDER_CODE"
+else
+  echo "  FAIL promo/options/coordinates order: $PROMO_ORDER_JSON"
+  fail=1
+fi
+
+echo "Driver onboarding"
+DRIVER_APPLY=$(curl -s -X POST "$BASE/api/driver/apply" -H 'content-type: application/json' \
+  -d '{"firstName":"Smoke","lastName":"Driver","email":"smoke.driver@example.com","phone":"0400000002","vehicleType":"car","licenceNumber":"NSW-SMOKE-1","abn":"12345678901","rightToWorkCountry":"Australia","payId":"smoke.driver@example.com","address":"2 Test Street","suburb":"Sydney","postcode":"2000","baseLat":-33.8701,"baseLng":151.2071,"termsAccepted":true,"privacyAccepted":true,"documents":{"photo_id":"SMOKE-ID","licence":"NSW-SMOKE-1"}}')
+if printf '%s' "$DRIVER_APPLY" | grep -q '"ok":true'; then
+  echo "  ok   driver application created with verification records"
+else
+  echo "  FAIL driver application: $DRIVER_APPLY"
+  fail=1
+fi
 
 # Place a real order through the public API, then walk it through the state the
 # pages read (tracking page + counter + kitchen) — this is the end-to-end flow a
@@ -112,7 +159,8 @@ if [ "$code" = "200" ]; then echo "  ok   200 POST /api/staff/login"; else echo 
 
 echo "Portals + admin console"
 for path in /counter /counter/customers /kitchen /delivery /admin /admin/orders /admin/menu /admin/menu/new /admin/reviews \
-            /admin/production /admin/pricing /admin/delivery /admin/tables /admin/staff /admin/whats-new; do
+            /admin/production /admin/pricing /admin/promotions /admin/drivers /admin/community \
+            /admin/integrations /admin/delivery /admin/tables /admin/staff /admin/whats-new; do
   check "$path" -b "$JAR"
 done
 
@@ -148,6 +196,42 @@ echo "Admin JSON endpoints"
 check "/api/ops/upload" -b "$JAR"
 check "/api/ops/settings" -b "$JAR" -X POST -H 'content-type: application/json' \
   -d '{"values":{"restaurant_phone":"02 9000 1234"}}' 
+check "/api/ops/square" -b "$JAR"
+check "/api/ops/tracking" -b "$JAR"
+check "/api/ops/drivers/ato-report?driver=1&fy=2026-27" -b "$JAR"
+EXPECT=201 check "/api/ops/promotions" -b "$JAR" -X POST -H 'content-type: application/json' \
+  -d '{"action":"create","code":"SMOKE5","name":"Smoke test offer","audience":"customer","kind":"flat","value":500}'
+EXPECT=503 check "/api/ops/square/cron"
+
+echo "Returns → community in need"
+RETURN_JSON=$(curl -s -b "$JAR" -X POST "$BASE/api/ops/community" -H 'content-type: application/json' \
+  -d '{"action":"create_return","orderCode":"KB-DEMO02","resolution":"community","reason":"Smoke test community redirect"}')
+if printf '%s' "$RETURN_JSON" | grep -q '"ok":true'; then
+  echo "  ok   return logged and community post published"
+else
+  echo "  FAIL community return: $RETURN_JSON"
+  fail=1
+fi
+OFFERS_JSON=$(curl -s "$BASE/api/community/offers")
+COMMUNITY_TOKEN=$(printf '%s' "$OFFERS_JSON" | grep -o '"token":"[^"]*"' | head -1 | cut -d'"' -f4)
+if [ -n "$COMMUNITY_TOKEN" ]; then
+  CLAIM_JSON=$(curl -s -X POST "$BASE/api/community/offers/$COMMUNITY_TOKEN/claim" \
+    -H 'content-type: application/json' -d '{"name":"Smoke Neighbour","keyword":"MINE"}')
+  CLAIM_ORDER_CODE=$(printf '%s' "$CLAIM_JSON" | grep -o '"claimOrderCode":"[^"]*"' | head -1 | cut -d'"' -f4)
+  if printf '%s' "$CLAIM_JSON" | grep -q '"autoReply":"thank you we have got it booked"' && \
+     [ -n "$CLAIM_ORDER_CODE" ]; then
+    echo "  ok   first comment wins with the exact auto-reply"
+    check "/order/$CLAIM_ORDER_CODE"
+  else
+    echo "  FAIL community claim: $CLAIM_JSON"
+    fail=1
+  fi
+  EXPECT=409 check "/api/community/offers/$COMMUNITY_TOKEN/claim" -X POST \
+    -H 'content-type: application/json' -d '{"name":"Too Late","keyword":"MINE"}'
+else
+  echo "  FAIL no community offer token: $OFFERS_JSON"
+  fail=1
+fi
 
 # Users & access over real HTTP: the cookie has to stop working the moment an
 # account is reset or disabled, and going live has to retire the demo logins.

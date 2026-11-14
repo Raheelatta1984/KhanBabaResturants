@@ -2,23 +2,11 @@ import { createHmac, timingSafeEqual } from "node:crypto";
 import { NextResponse } from "next/server";
 import { getDb } from "@/lib/db";
 import { getSetting } from "@/lib/settings";
-import { completeOrder, getOrderById } from "@/lib/orders";
+import { applyCourierStatus } from "@/lib/delivery/webhooks";
 
 export const dynamic = "force-dynamic";
 
-const MAP: Record<string, string> = {
-  accepted: "accepted",
-  pickup: "pickup",
-  pickup_complete: "pickup",
-  dropoff: "dropoff",
-  dropoff_complete: "dropoff",
-  delivered: "delivered",
-  canceled: "cancelled",
-  cancelled: "cancelled",
-  returned: "failed",
-};
-
-/** Uber Direct delivery status webhook. */
+/** Uber Direct delivery status webhook — shares the courier status mapper. */
 export async function POST(request: Request) {
   const raw = await request.text();
   const secret =
@@ -50,6 +38,8 @@ export async function POST(request: Request) {
     id?: string;
     status?: string;
     courier?: { name?: string; phone_number?: string };
+    tracking_url?: string;
+    eta_minutes?: number;
   };
   try {
     payload = JSON.parse(raw) as typeof payload;
@@ -66,54 +56,15 @@ export async function POST(request: Request) {
     );
 
   const db = await getDb();
-  const job = await db.maybeOne<{
-    id: number;
-    order_id: number;
-    status: string;
-  }>(
-    "SELECT * FROM delivery_jobs WHERE provider_delivery_id = $1 ORDER BY id DESC LIMIT 1",
-    [deliveryId],
-  );
-  if (!job) return NextResponse.json({ ok: true, ignored: true });
-
-  const mapped = MAP[status] ?? status;
-  await db.query(
-    `UPDATE delivery_jobs SET status = $1, external_status = $2, courier_name = COALESCE($3, courier_name),
-      courier_phone = COALESCE($4, courier_phone) WHERE id = $5`,
-    [
-      mapped,
-      status,
-      payload.courier?.name ?? null,
-      payload.courier?.phone_number ?? null,
-      job.id,
-    ],
-  );
-
-  const order = await getOrderById(db, job.order_id);
-  if (order) {
-    if (mapped === "delivered") {
-      await db.query(
-        "UPDATE delivery_jobs SET completed_at = now() WHERE id = $1",
-        [job.id],
-      );
-      if (order.status !== "completed")
-        await completeOrder(
-          db,
-          order.id,
-          "uber-webhook",
-          "Delivered — enjoy your meal",
-        );
-    } else if (mapped === "pickup" && order.status === "out_for_delivery") {
-      await db.query("UPDATE orders SET progress = 95 WHERE id = $1", [
-        order.id,
-      ]);
-    } else if (mapped === "cancelled" || mapped === "failed") {
-      await db.query(
-        "UPDATE orders SET status = 'ready', progress = 85, updated_at = now() WHERE id = $1 AND status = 'out_for_delivery'",
-        [order.id],
-      );
-    }
-  }
-
-  return NextResponse.json({ ok: true, status: mapped });
+  const result = await applyCourierStatus(db, {
+    provider: "uber_direct",
+    deliveryId,
+    status,
+    courierName: payload.courier?.name,
+    courierPhone: payload.courier?.phone_number,
+    trackingUrl: payload.tracking_url,
+    etaMinutes: payload.eta_minutes,
+    actor: "uber-webhook",
+  });
+  return NextResponse.json({ ok: true, ...result });
 }

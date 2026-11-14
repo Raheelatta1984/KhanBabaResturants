@@ -1,6 +1,10 @@
 import type { Db as Database } from "./driver";
 import { hashPassword } from "../auth/password";
-import { DEFAULT_SETTINGS } from "../settings";
+import {
+  DEFAULT_COMMUNITY_AUTO_REPLY,
+  DEFAULT_SETTINGS,
+} from "../settings";
+import { getTimeParts } from "../time";
 import { completeBatch, startBatch } from "../production";
 
 type VariantSeed = {
@@ -1202,6 +1206,7 @@ export async function seedDatabase(db: Database): Promise<{ seeded: boolean }> {
     await seedMaterialsAndRecipes(tx);
     await seedWhatsNew(tx);
     await seedProductionAndOrders(tx);
+    await seedPlatformExpansion(tx);
     return { seeded: true };
   });
 }
@@ -2000,5 +2005,393 @@ async function seedProductionAndOrders(db: Database) {
     `INSERT INTO order_events (order_id, type, message, actor, progress, created_at)
      VALUES ($1, 'completed', 'Delivered — enjoy your meal', 'system', 100, now() - interval '2 hours')`,
     [completedId],
+  );
+}
+
+/**
+ * Demo data for the ERP expansion. Everything is additive and clearly marked as
+ * sandbox: a verified driver with an ATO trip, a live own-fleet delivery on the
+ * map, customer and driver promotions, a returns → community programme with a
+ * first-comment-wins example, and a detached Square POS sync record.
+ */
+async function seedPlatformExpansion(db: Database) {
+  const { iso } = getTimeParts();
+  const [year, month] = iso.split("-").map(Number);
+  const start = month >= 7 ? year : year - 1;
+  const fy = `${start}-${String((start + 1) % 100).padStart(2, "0")}`;
+  const rate = Number(DEFAULT_SETTINGS.ato_cents_per_km_current) || 91;
+
+  // One coordinate pair per delivery address; customers and staff see the same
+  // pin on the map. The small offsets keep the demo markers apart in Sydney.
+  await db.query(
+    `UPDATE orders
+      SET delivery_lat = -33.8740 + (id % 10) * 0.0012,
+          delivery_lng = 151.2035 + (id % 8) * 0.0014,
+          payment_option = CASE
+            WHEN payment_method = 'online' AND payment_status = 'paid'
+              THEN COALESCE(payment_option, 'card_visa')
+            ELSE payment_option END
+      WHERE channel = 'delivery'`,
+  );
+  await db.query(
+    `UPDATE customers SET address_lat = -33.8722, address_lng = 151.2061
+      WHERE address IS NOT NULL`,
+  );
+
+  const approvedDriverId = await db.insert(
+    `INSERT INTO drivers (code, first_name, last_name, email, phone, status,
+      vehicle_type, vehicle_rego, vehicle_make, licence_number, licence_state,
+      licence_expiry, insurance_provider, insurance_expiry, abn,
+      right_to_work_country, police_check_ref, pay_id, address, suburb, postcode,
+      base_lat, base_lng, current_lat, current_lng, last_seen_at,
+      commission_percent, per_delivery_fee_cents, max_radius_km,
+      terms_accepted_at, privacy_accepted_at, approved_at, approved_by, notes,
+      created_at, updated_at)
+     VALUES ('KB-DRV-001', 'Adeel', 'Khan', 'adeel.driver@khanbaba.com.au', '0400 123 456',
+      'approved', 'car', 'NSW-KB-240', 'Toyota Corolla', 'NSW-8839201', 'NSW',
+      '2028-06-30', 'NRMA', '2027-03-31', '51824756201', 'Australia', 'NPC-2026-1182',
+      'adeel.driver@khanbaba.com.au', '12 Harris Street', 'Pyrmont', '2009',
+      -33.8688, 151.2093, -33.8727, 151.2056, now() - interval '2 minutes',
+      15, 300, 15, now() - interval '32 days', now() - interval '32 days',
+      now() - interval '30 days', 'admin@khanbaba.com.au',
+      'Demo partner: all seven checks verified before approval.',
+      now() - interval '32 days', now() - interval '2 minutes')
+     RETURNING id`,
+  );
+  const applicantId = await db.insert(
+    `INSERT INTO drivers (code, first_name, last_name, email, phone, status,
+      vehicle_type, vehicle_rego, licence_number, abn, address, suburb, postcode,
+      base_lat, base_lng, max_radius_km, terms_accepted_at, privacy_accepted_at,
+      notes, created_at)
+     VALUES ('KB-DRV-002', 'Mariam', 'Ali', 'mariam.applicant@example.com', '0400 987 654',
+      'under_review', 'bicycle', NULL, 'NSW-7711200', '61293847510',
+      '8 George Street', 'Sydney', '2000', -33.8680, 151.2085, 8,
+      now() - interval '1 day', now() - interval '1 day',
+      'Demo application — documents are awaiting verification.',
+      now() - interval '1 day')
+     RETURNING id`,
+  );
+
+  const requiredDocuments = [
+    "photo_id",
+    "licence",
+    "insurance",
+    "police_check",
+    "right_to_work",
+    "abn",
+    "bank",
+  ];
+  for (const driverId of [approvedDriverId, applicantId]) {
+    const approved = driverId === approvedDriverId;
+    for (const kind of requiredDocuments) {
+      await db.query(
+        `INSERT INTO driver_documents (driver_id, kind, reference, status,
+          verified_by, verified_at, notes, created_at, updated_at)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,now() - interval '31 days',now() - interval '30 days')`,
+        [
+          driverId,
+          kind,
+          `DEMO-${kind.toUpperCase()}-${driverId}`,
+          approved ? "verified" : "submitted",
+          approved ? "admin@khanbaba.com.au" : null,
+          approved ? new Date(Date.now() - 30 * 86400000).toISOString() : null,
+          approved ? "Verified against the original document." : "Awaiting review",
+        ],
+      );
+    }
+    await db.query(
+      `INSERT INTO driver_verification_events (driver_id, action, detail, actor, created_at)
+       VALUES ($1,'application','Driver application received','community',now() - interval '32 days')`,
+      [driverId],
+    );
+  }
+  await db.query(
+    `INSERT INTO driver_verification_events (driver_id, action, detail, actor, created_at)
+     VALUES ($1,'approved','All seven compliance checks verified — dispatch enabled','admin@khanbaba.com.au',now() - interval '30 days')`,
+    [approvedDriverId],
+  );
+
+  const completedJob = await db.maybeOne<{ id: number; order_id: number }>(
+    `SELECT j.id, j.order_id FROM delivery_jobs j JOIN orders o ON o.id = j.order_id
+      WHERE o.code = 'KB-DEMO06' ORDER BY j.id LIMIT 1`,
+  );
+  if (completedJob) {
+    await db.query(
+      `UPDATE delivery_jobs SET provider = 'own_fleet', driver_id = $1,
+        driver_fee_cents = 547, driver_settled_at = now() - interval '2 hours',
+        distance_km = 3.8 WHERE id = $2`,
+      [approvedDriverId, completedJob.id],
+    );
+    for (const [kind, amount, description] of [
+      ["delivery_fee", 300, "Completed delivery KB-DEMO06 — base fee"],
+      ["commission", 97, "Completed delivery KB-DEMO06 — 15% commission"],
+      ["bonus", 150, "Driver partner weekend bonus"],
+    ] as [string, number, string][]) {
+      await db.query(
+        `INSERT INTO driver_ledger (driver_id, job_id, order_id, kind, amount_cents,
+          description, settled_at, created_at)
+         VALUES ($1,$2,$3,$4,$5,$6,NULL,now() - interval '2 hours')`,
+        [approvedDriverId, completedJob.id, completedJob.order_id, kind, amount, description],
+      );
+    }
+    await db.query(
+      `INSERT INTO driver_trips (driver_id, job_id, order_id, order_code,
+        start_lat, start_lng, end_lat, end_lng, distance_km, purpose, method,
+        source, financial_year, rate_cents_per_km, claim_cents, started_at,
+        ended_at, notes, created_at)
+       VALUES ($1,$2,$3,'KB-DEMO06',-33.8688,151.2093,-33.8744,151.2056,3.8,
+        'Delivering customer orders','cents_per_km','gps',$4,$5,$6,
+        now() - interval '3 hours',now() - interval '2 hours',
+        'GPS breadcrumbs from the driver portal; 2026-27 ATO rate captured on the trip.',
+        now() - interval '2 hours')`,
+      [
+        approvedDriverId,
+        completedJob.id,
+        completedJob.order_id,
+        fy,
+        rate,
+        Math.round(3.8 * rate),
+      ],
+    );
+  }
+
+  // A live own-fleet job so the customer tracking page, delivery desk and
+  // driver portal all have a real map to show straight after seeding.
+  const variant = await db.one<{ item_id: number; variant_id: number; name: string }>(
+    `SELECT mi.id AS item_id, iv.id AS variant_id, mi.name
+      FROM menu_items mi JOIN item_variants iv ON iv.item_id = mi.id
+      WHERE mi.slug = 'butter-chicken' ORDER BY iv.sort_order LIMIT 1`,
+  );
+  const liveOrderId = await db.insert(
+    `INSERT INTO orders (code, tracking_token, channel, customer_name, phone,
+      address, suburb, postcode, delivery_lat, delivery_lng, subtotal_cents,
+      total_cents, payment_method, payment_status, payment_ref, payment_option,
+      status, progress, created_at, updated_at, confirmed_at, kitchen_started_at,
+      ready_at, dispatched_at, promised_at)
+     VALUES ('KB-DEMO07','demo-kb-demo07-token','delivery','Zara Ahmed','0412 345 678',
+      '88 George Street','Sydney','2000',-33.8706,151.2079,2998,3647,'online','paid',
+      'sim_pi_demo07','card_visa','out_for_delivery',92,
+      now() - interval '50 minutes',now() - interval '10 minutes',
+      now() - interval '48 minutes',now() - interval '42 minutes',
+      now() - interval '30 minutes',now() - interval '22 minutes',
+      now() + interval '12 minutes')
+     RETURNING id`,
+  );
+  await db.query(
+    `INSERT INTO order_items (order_id, item_id, variant_id, name, variant_label,
+      qty, unit_price_cents, line_total_cents, prep_state)
+     VALUES ($1,$2,$3,$4,'500 ml',1,2998,2998,'ready')`,
+    [liveOrderId, variant.item_id, variant.variant_id, variant.name],
+  );
+  await db.query(
+    `INSERT INTO order_events (order_id, type, message, actor, progress, created_at)
+     VALUES ($1,'dispatched','Out for delivery with Adeel K. — live GPS tracking on','delivery',92,now() - interval '22 minutes')`,
+    [liveOrderId],
+  );
+  const liveJobId = await db.insert(
+    `INSERT INTO delivery_jobs (order_id, provider, provider_quote_id,
+      provider_delivery_id, cost_cents, customer_fee_cents, markup_cents, status,
+      courier_name, eta_minutes, driver_id, distance_km, quote_json,
+      external_status, triggered_by, created_at, dispatched_at)
+     VALUES ($1,'own_fleet','own_q_demo07','own_d_demo07',540,649,109,'dropoff',
+      'Adeel K.',12,$2,3.2,'{"provider":"own_fleet","driver":{"code":"KB-DRV-001"}}',
+      'dropoff','delivery',now() - interval '25 minutes',now() - interval '22 minutes')
+     RETURNING id`,
+    [liveOrderId, approvedDriverId],
+  );
+  for (const [lat, lng, minutes] of [
+    [-33.8688, 151.2093, 22],
+    [-33.8700, 151.2058, 14],
+    [-33.8719, 151.2069, 6],
+    [-33.8727, 151.2056, 2],
+  ] as [number, number, number][]) {
+    await db.query(
+      `INSERT INTO driver_location_pings (driver_id, order_id, job_id, lat, lng,
+        accuracy_m, heading, speed_kmh, source, recorded_at)
+       VALUES ($1,$2,$3,$4,$5,8,110,26,'driver_app',now() - ($6::text || ' minutes')::interval)`,
+      [approvedDriverId, liveOrderId, liveJobId, lat, lng, String(minutes)],
+    );
+  }
+  await db.query(
+    `UPDATE drivers SET current_lat = -33.8727, current_lng = 151.2056,
+      last_seen_at = now() - interval '2 minutes' WHERE id = $1`,
+    [approvedDriverId],
+  );
+
+  const welcomeId = await db.insert(
+    `INSERT INTO promotions (code, name, description, audience, kind, value,
+      max_discount_cents, min_subtotal_cents, channels, usage_limit,
+      per_customer_limit, usage_count, active, created_at)
+     VALUES ('WELCOME10','10% welcome offer','First-order discount for customers',
+      'customer','percent',10,1500,2000,NULL,0,1,1,TRUE,now() - interval '20 days')
+     RETURNING id`,
+  );
+  await db.insert(
+    `INSERT INTO promotions (code, name, description, audience, kind, value,
+      min_subtotal_cents, channels, usage_limit, active, created_at)
+     VALUES ('FREEDEL','Free delivery weekend','Delivery fee on us over $40',
+      'customer','free_delivery',0,4000,'delivery',250,TRUE,now() - interval '5 days')
+     RETURNING id`,
+  );
+  const driverPromoId = await db.insert(
+    `INSERT INTO promotions (code, name, description, audience, kind, value,
+      driver_id, usage_limit, usage_count, active, created_at)
+     VALUES ('DRIVERBOOST','Weekend driver bonus','$2.50 bonus on each successful delivery',
+      'driver','driver_bonus',250,$1,0,1,TRUE,now() - interval '10 days')
+     RETURNING id`,
+    [approvedDriverId],
+  );
+  await db.query(
+    `INSERT INTO promotion_redemptions (promotion_id, order_id, discount_cents, created_at)
+     VALUES ($1,NULL,420,now() - interval '2 hours')`,
+    [welcomeId],
+  );
+  await db.query(
+    `INSERT INTO promotion_redemptions (promotion_id, job_id, driver_id,
+      reward_cents, created_at)
+     VALUES ($1,$2,$3,250,now() - interval '2 hours')`,
+    [driverPromoId, completedJob?.id ?? null, approvedDriverId],
+  );
+
+  // Zero-cost pickup ticket for the already-claimed community example.
+  const giveOrderId = await db.insert(
+    `INSERT INTO orders (code, tracking_token, channel, customer_name, notes,
+      subtotal_cents, surcharge_cents, total_cents, payment_method, payment_status,
+      status, progress, promised_at, created_at, updated_at, ready_at)
+     VALUES ('KB-GIVE-DEMO','demo-kb-give-demo-token','pickup','Community neighbour',
+      'Community in need — click & collect ONLY. Pickup code KB-GIVE-CLAIMED. No charge.',
+      0,0,0,'counter','paid','awaiting_collection',88,
+      now() + interval '2 hours',now() - interval '20 minutes',
+      now() - interval '20 minutes',now() - interval '20 minutes')
+     RETURNING id`,
+  );
+  await db.query(
+    `INSERT INTO order_items (order_id, name, variant_label, qty, unit_price_cents,
+      line_total_cents, prep_state)
+     VALUES ($1,'Community meal — untouched returned order','1 meal',1,0,0,'ready')`,
+    [giveOrderId],
+  );
+  await db.query(
+    `INSERT INTO order_events (order_id, type, message, actor, progress, created_at)
+     VALUES ($1,'created','Click & collect booking created — present the pickup code at the counter','community',88,now() - interval '20 minutes')`,
+    [giveOrderId],
+  );
+
+  const openOrder = await db.maybeOne<{ id: number }>(
+    "SELECT id FROM orders WHERE code = 'KB-DEMO01'",
+  );
+  const claimedOrder = await db.maybeOne<{ id: number }>(
+    "SELECT id FROM orders WHERE code = 'KB-DEMO03'",
+  );
+  if (openOrder) {
+    const returnId = await db.insert(
+      `INSERT INTO return_requests (order_id, code, reason, resolution, status,
+        notes, requested_by, created_at)
+       VALUES ($1,'RET-DEMO-OPEN','Customer cancelled after packing — untouched',
+        'community','open','Redirected to the community programme','counter@khanbaba.com.au',
+        now() - interval '35 minutes')
+       RETURNING id`,
+      [openOrder.id],
+    );
+    await db.query(
+      `INSERT INTO order_events (order_id, type, message, actor, progress, created_at)
+       VALUES ($1,'return','Return RET-DEMO-OPEN logged — community','counter@khanbaba.com.au',NULL,now() - interval '35 minutes')`,
+      [openOrder.id],
+    );
+    const offerId = await db.insert(
+      `INSERT INTO community_offers (return_id, order_id, token, pickup_code,
+        title, description, contents, channel, status, claim_keyword,
+        auto_reply_text, facebook_post_id, facebook_post_url, facebook_mode,
+        posted_at, posted_by, comments_closed, pickup_deadline, created_at)
+       VALUES ($1,$2,'demo-community-offer','KB-GIVE-OPEN',
+        'Community meal from order KB-DEMO01',
+        'Untouched order KB-DEMO01 is available free to a neighbour in need. Click & collect only.',
+        '[{"name":"Chicken Biryani","qty":1},{"name":"Garlic Naan","qty":1}]',
+        'click_and_collect','posted','MINE',$3,'sandbox-demo-open',
+        '/community/demo-community-offer','sandbox',now() - interval '30 minutes',
+        'counter@khanbaba.com.au',FALSE,now() + interval '1 day',
+        now() - interval '34 minutes')
+       RETURNING id`,
+      [returnId, openOrder.id, DEFAULT_COMMUNITY_AUTO_REPLY],
+    );
+    for (const [kind, detail, actor] of [
+      ["created", "Drafted from return RET-DEMO-OPEN", "counter@khanbaba.com.au"],
+      ["posted_sandbox", "Published in sandbox mode — add Facebook Page credentials for a live post", "counter@khanbaba.com.au"],
+      ["post_preview", "FIRST COMMENT WINS: be the first to comment \"MINE\" and it is yours. Click & collect only — no delivery, no payment.", "counter@khanbaba.com.au"],
+    ] as [string, string, string][]) {
+      await db.query(
+        `INSERT INTO community_offer_events (offer_id, kind, detail, actor, created_at)
+         VALUES ($1,$2,$3,$4,now() - interval '30 minutes')`,
+        [offerId, kind, detail, actor],
+      );
+    }
+  }
+  if (claimedOrder) {
+    const returnId = await db.insert(
+      `INSERT INTO return_requests (order_id, code, reason, resolution, status,
+        notes, requested_by, resolved_by, resolved_at, created_at)
+       VALUES ($1,'RET-DEMO-CLAIMED','Customer cancelled after packing — untouched',
+        'community','resolved','First comment claimed it for click & collect','counter@khanbaba.com.au',
+        'facebook-sync',now() - interval '20 minutes',now() - interval '45 minutes')
+       RETURNING id`,
+      [claimedOrder.id],
+    );
+    const offerId = await db.insert(
+      `INSERT INTO community_offers (return_id, order_id, token, pickup_code,
+        title, description, contents, channel, status, claim_keyword,
+        auto_reply_text, facebook_post_id, facebook_post_url, facebook_mode,
+        posted_at, posted_by, comments_closed, auto_reply_posted_at, claimed_by,
+        claimed_at, claim_comment_id, claim_source, claim_order_code,
+        pickup_deadline, created_at)
+       VALUES ($1,$2,'demo-community-claimed','KB-GIVE-CLAIMED',
+        'Community meal from order KB-DEMO03',
+        'Untouched order KB-DEMO03 is available free to a neighbour in need. Click & collect only.',
+        '[{"name":"Butter Chicken","qty":1},{"name":"Mango Lassi","qty":1}]',
+        'click_and_collect','claimed','MINE',$3,'sandbox-demo-claimed',
+        '/community/demo-community-claimed','sandbox',now() - interval '40 minutes',
+        'counter@khanbaba.com.au',TRUE,now() - interval '20 minutes','Ayesha K.',
+        now() - interval '20 minutes','sandbox-comment-1','facebook','KB-GIVE-DEMO',
+        now() + interval '2 hours',now() - interval '44 minutes')
+       RETURNING id`,
+      [returnId, claimedOrder.id, DEFAULT_COMMUNITY_AUTO_REPLY],
+    );
+    for (const [kind, detail, actor] of [
+      ["created", "Drafted from return RET-DEMO-CLAIMED", "counter@khanbaba.com.au"],
+      ["posted_sandbox", "Published in sandbox mode", "counter@khanbaba.com.au"],
+      ["claimed", "Ayesha K. claimed the meal (facebook) — click & collect only", "facebook-sync"],
+      ["auto_reply", DEFAULT_COMMUNITY_AUTO_REPLY, "facebook-sync"],
+      ["comments_blocked", "Post closed to further comments", "facebook-sync"],
+    ] as [string, string, string][]) {
+      await db.query(
+        `INSERT INTO community_offer_events (offer_id, kind, detail, actor, created_at)
+         VALUES ($1,$2,$3,$4,now() - interval '20 minutes')`,
+        [offerId, kind, detail, actor],
+      );
+    }
+  }
+
+  // Detached POS bridge: a sandbox sync record and a mirrored transaction.
+  await db.query(
+    `INSERT INTO square_sync_records (direction, entity, entity_ref, external_id,
+      status, message, payload, created_at)
+     VALUES ('outbound','order','KB-DEMO06','sq-order-demo06','ok',
+      'Sandbox mirror — set SQUARE_ACCESS_TOKEN + SQUARE_LOCATION_ID for live POS sync',
+      '{"mode":"sandbox","order":"KB-DEMO06"}',now() - interval '1 hour')`,
+  );
+  await db.query(
+    `INSERT INTO square_transactions (external_id, kind, source, order_code,
+      amount_cents, currency, status, occurred_at, raw, created_at)
+     VALUES ('sq-pay-demo06','payment','square','KB-DEMO06',4847,'AUD','COMPLETED',
+      now() - interval '2 hours','{"mode":"sandbox"}',now() - interval '2 hours')`,
+  );
+
+  await db.query(
+    `INSERT INTO whats_new (title, summary, body, category, version, pr_number,
+      pr_url, pinned, published_at)
+     VALUES ('ERP expansion: every partner in one portal',
+      'DoorDash, a verified driver network, live maps, promotions, community returns and a detached Square POS bridge.',
+      'Delivery now compares Uber Direct, DoorDash Drive and our own verified drivers. Drivers are onboarded with seven compliance checks, GPS tracking, commission on successful delivery and an ATO cents-per-km CSV. Customers can use Visa, Mastercard, Amex, Afterpay or PayPal and promotion codes; returned untouched meals go to the community through a first-comment-wins Facebook post with the exact thank-you auto-reply and blocked comments. Square POS is a separate synchronisation boundary — the ordering core never depends on it.',
+      'feature','2.0.0',11,'https://github.com/Raheelatta1984/KhanBabaResturants/pull/11',FALSE,
+      now() - interval '10 minutes')`,
   );
 }

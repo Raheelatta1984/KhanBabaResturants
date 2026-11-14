@@ -2,7 +2,12 @@ import type { Metadata } from "next";
 import Link from "next/link";
 import { CheckoutFlow } from "@/components/CheckoutFlow";
 import { getSettings } from "@/lib/settings";
-import { stripeConfigured } from "@/lib/payments";
+import {
+  enabledPaymentOptions,
+  PAYMENT_OPTIONS,
+  paypalConfigured,
+  stripeConfigured,
+} from "@/lib/payments";
 import { getDb } from "@/lib/db";
 import { computePricing } from "@/lib/pricing";
 import { getCurrentCustomer } from "@/lib/auth/customer";
@@ -23,12 +28,28 @@ export default async function CheckoutPage() {
     subtotalCents: 0,
     channel: "delivery",
   });
+  const [stripeLive, paypalLive] = await Promise.all([
+    stripeConfigured(),
+    paypalConfigured(),
+  ]);
   const paymentMode: "simulated" | "stripe" =
     (settings.payment_provider === "stripe" ||
       settings.payment_provider === "auto") &&
-    (await stripeConfigured())
+    stripeLive
       ? "stripe"
       : "simulated";
+  const enabled = enabledPaymentOptions(settings);
+  const paymentOptions = PAYMENT_OPTIONS.filter((option) =>
+    enabled.includes(option.id),
+  );
+  const liveGateways = [
+    ...((settings.payment_provider === "stripe" ||
+      settings.payment_provider === "auto") &&
+    stripeLive
+      ? ["stripe"]
+      : []),
+    ...(paypalLive ? ["paypal"] : []),
+  ];
 
   return (
     <section className="section-tight" style={{ paddingTop: 32 }}>
@@ -67,9 +88,10 @@ export default async function CheckoutPage() {
               Checkout
             </h1>
             <p className="muted small">
-              Delivery fees come from a live Uber Direct quote. Weekend and
-              public holiday surcharges are applied automatically and shown
-              before you pay.
+              Delivery fees come from the best live quote across Uber Direct,
+              DoorDash Drive and our own verified drivers. Add a promotion code,
+              choose Visa, Mastercard, Afterpay or PayPal, and see every
+              surcharge before you pay.
             </p>
           </div>
           <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
@@ -107,6 +129,8 @@ export default async function CheckoutPage() {
           payAtCounterEnabled={settings.pay_at_counter_enabled === "1"}
           showDeliveryBreakdown={settings.show_delivery_breakdown === "1"}
           gstPercent={Number(settings.gst_percent || 10)}
+          paymentOptions={paymentOptions}
+          liveGateways={liveGateways}
         />
       </div>
     </section>

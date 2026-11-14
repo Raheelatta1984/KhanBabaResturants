@@ -40,7 +40,7 @@ export type Holiday = {
 export type Adjustment = {
   code: string;
   label: string;
-  kind: "weekend" | "public_holiday" | "priority" | "peak" | "delivery";
+  kind: "weekend" | "public_holiday" | "priority" | "peak" | "delivery" | "promotion";
   amountCents: number;
   percent?: number;
   note?: string;
@@ -66,6 +66,7 @@ export type PricingBreakdown = {
   deliveryFeeCents: number;
   deliveryCostCents: number;
   deliveryServiceFeeCents: number;
+  discountCents: number;
   totalCents: number;
   priorityAvailable: boolean;
   priorityFeeCentsIfSelected: number;
@@ -174,6 +175,9 @@ export type PricingInput = {
   channel: Channel;
   priority?: boolean;
   delivery?: DeliveryPricing | null;
+  /** Server-validated promotion discount (never trusted from the browser). */
+  discountCents?: number;
+  promotionLabel?: string;
   at?: Date;
 };
 
@@ -268,10 +272,32 @@ export async function computePricing(
     });
   }
 
+  const discountCents = Math.max(
+    0,
+    Math.min(
+      Math.round(input.discountCents ?? 0),
+      input.subtotalCents + surchargeCents + priorityFeeCents + deliveryFeeCents,
+    ),
+  );
+  if (discountCents > 0) {
+    adjustments.push({
+      code: "promotion",
+      label: input.promotionLabel ?? "Promotion",
+      kind: "promotion",
+      amountCents: -discountCents,
+      note: "Applied at checkout",
+    });
+  }
+
   const totalCents =
-    input.subtotalCents + surchargeCents + priorityFeeCents + deliveryFeeCents;
+    input.subtotalCents +
+    surchargeCents +
+    priorityFeeCents +
+    deliveryFeeCents -
+    discountCents;
 
   return {
+    discountCents,
     subtotalCents: input.subtotalCents,
     adjustments,
     surchargeCents,

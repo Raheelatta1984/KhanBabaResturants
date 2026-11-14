@@ -1,7 +1,12 @@
 import { getDb } from "@/lib/db";
 import { getSettings } from "@/lib/settings";
-import { uberConfigured } from "@/lib/delivery";
-import { stripeConfigured } from "@/lib/payments";
+import {
+  configuredProviders,
+  doordashConfigured,
+  providerLabel,
+  uberConfigured,
+} from "@/lib/delivery";
+import { stripeConfigured, paypalConfigured, PAYMENT_OPTIONS } from "@/lib/payments";
 import { formatDateTime } from "@/lib/time";
 import { money } from "@/lib/money";
 import { SettingsForm } from "@/components/portal/AdminForms";
@@ -11,7 +16,7 @@ export const dynamic = "force-dynamic";
 
 export default async function DeliverySettingsPage() {
   const db = await getDb();
-  const [settings, jobs, uberLive, stripeLive, media] = await Promise.all([
+  const [settings, jobs, uberLive, stripeLive, media, doordashLive, paypalLive, partners] = await Promise.all([
     getSettings(),
     db.query<{
       id: number;
@@ -30,6 +35,9 @@ export default async function DeliverySettingsPage() {
     uberConfigured(db),
     stripeConfigured(),
     mediaConfig(),
+    doordashConfigured(db),
+    paypalConfigured(),
+    configuredProviders(db),
   ]);
 
   return (
@@ -45,6 +53,12 @@ export default async function DeliverySettingsPage() {
         <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
           <span className={`badge ${uberLive ? "badge-green" : "badge-amber"}`}>
             {uberLive ? "Uber Direct connected" : "Uber Direct not configured"}
+          </span>
+          <span className={`badge ${doordashLive ? "badge-green" : "badge-amber"}`}>
+            {doordashLive ? "DoorDash Drive connected" : "DoorDash not configured"}
+          </span>
+          <span className={`badge ${paypalLive ? "badge-green" : "badge-amber"}`}>
+            {paypalLive ? "PayPal connected" : "PayPal sandbox"}
           </span>
           <span
             className={`badge ${stripeLive ? "badge-green" : "badge-amber"}`}
@@ -90,6 +104,16 @@ export default async function DeliverySettingsPage() {
         </div>
       </div>
 
+      <div className="notice" style={{ marginBottom: 18 }}>
+        Quoting from{" "}
+        <b>{partners.length ? partners.map(providerLabel).join(" · ") : "the sandbox courier"}</b>{" "}
+        using the <b>{settings.delivery_quote_strategy}</b> strategy. The Square
+        POS bridge, driver network and community settings live under{" "}
+        <a href="/admin/integrations" style={{ color: "var(--accent)" }}>Integrations</a>,{" "}
+        <a href="/admin/drivers" style={{ color: "var(--accent)" }}>Driver management</a> and{" "}
+        <a href="/admin/community" style={{ color: "var(--accent)" }}>Returns &amp; community</a>.
+      </div>
+
       <SettingsForm
         values={settings}
         groups={[
@@ -105,11 +129,33 @@ export default async function DeliverySettingsPage() {
                 options: [
                   {
                     value: "auto",
-                    label: "Auto (Uber Direct when configured)",
+                    label: "Auto — compare every configured partner",
                   },
                   { value: "uber", label: "Force Uber Direct" },
+                  { value: "doordash", label: "Force DoorDash Drive" },
+                  { value: "own_fleet", label: "Force our own verified drivers" },
                   { value: "simulated", label: "Sandbox courier" },
                 ],
+              },
+              {
+                key: "delivery_quote_strategy",
+                label: "How auto chooses a partner",
+                type: "select",
+                options: [
+                  { value: "cheapest", label: "Cheapest live quote" },
+                  { value: "fastest", label: "Fastest ETA" },
+                ],
+              },
+              {
+                key: "own_fleet_enabled",
+                label: "Offer our own driver fleet for quotes",
+                type: "toggle",
+              },
+              {
+                key: "delivery_radius_km",
+                label: "Own-fleet delivery radius",
+                type: "number",
+                suffix: "km",
               },
               {
                 key: "delivery_markup_percent",
@@ -183,19 +229,32 @@ export default async function DeliverySettingsPage() {
             ],
           },
           {
-            title: "Payments",
+            title: "DoorDash Drive credentials",
             description:
-              "Stripe uses a hosted Checkout Session, so card data never touches this application. Without a key the platform runs in sandbox mode.",
+              "Create a Drive developer app and copy the developer ID, key ID and signing secret. Env vars (DOORDASH_DEVELOPER_ID, DOORDASH_KEY_ID, DOORDASH_SIGNING_SECRET) take precedence. The quote/dispatch API is idempotent on our order-scoped external_delivery_id.",
+            fields: [
+              { key: "doordash_developer_id", label: "Developer ID", type: "password" },
+              { key: "doordash_key_id", label: "Key ID (JWT kid)", type: "password" },
+              { key: "doordash_signing_secret", label: "Signing secret", type: "password" },
+              { key: "doordash_store_id", label: "External store ID", type: "text" },
+              { key: "doordash_webhook_secret", label: "Webhook signing secret", type: "password" },
+            ],
+          },
+          {
+            title: "Payments",
+            description: `Stripe hosts card and Afterpay checkout, so card data never touches this application. PayPal uses its own Orders v2 approval flow. Enabled options: ${PAYMENT_OPTIONS.map((option) => option.id).join(", ")} — enter them as a comma-separated list. Without credentials every option is clearly labelled sandbox at checkout.`,
             fields: [
               {
                 key: "payment_provider",
-                label: "Payment provider",
+                label: "Card / Afterpay provider",
                 type: "select",
                 options: [
                   { value: "simulated", label: "Sandbox (no live charges)" },
                   { value: "stripe", label: "Stripe Checkout" },
+                  { value: "auto", label: "Auto — Stripe when configured" },
                 ],
               },
+              { key: "payment_methods", label: "Enabled payment options (CSV)", type: "textarea" },
               {
                 key: "stripe_secret_key",
                 label: "Stripe secret key",
@@ -204,6 +263,30 @@ export default async function DeliverySettingsPage() {
               {
                 key: "stripe_webhook_secret",
                 label: "Stripe webhook secret",
+                type: "password",
+              },
+              {
+                key: "paypal_client_id",
+                label: "PayPal client ID",
+                type: "password",
+              },
+              {
+                key: "paypal_client_secret",
+                label: "PayPal client secret",
+                type: "password",
+              },
+              {
+                key: "paypal_mode",
+                label: "PayPal environment",
+                type: "select",
+                options: [
+                  { value: "sandbox", label: "Sandbox" },
+                  { value: "live", label: "Live" },
+                ],
+              },
+              {
+                key: "paypal_webhook_id",
+                label: "PayPal webhook ID",
                 type: "password",
               },
               { key: "gst_percent", label: "GST", type: "number", suffix: "%" },
@@ -244,11 +327,7 @@ export default async function DeliverySettingsPage() {
                       <b>{job.code}</b>
                       <div className="tiny muted">{job.suburb ?? "—"}</div>
                     </td>
-                    <td className="tiny">
-                      {job.provider === "uber_direct"
-                        ? "Uber Direct"
-                        : "Sandbox"}
-                    </td>
+                    <td className="tiny">{providerLabel(job.provider)}</td>
                     <td>
                       <span className="tag">{job.status}</span>
                     </td>
@@ -274,9 +353,13 @@ export default async function DeliverySettingsPage() {
       </section>
 
       <div className="notice" style={{ marginTop: 18 }}>
-        Webhook endpoints: <code>/api/webhooks/uber</code> for courier status
-        and <code>/api/webhooks/stripe</code> for payment confirmation. Both
-        accept unsigned requests only in sandbox mode.
+        Webhooks: <code>/api/webhooks/uber</code>,{" "}
+        <code>/api/webhooks/doordash</code> (courier status),{" "}
+        <code>/api/webhooks/stripe</code>,{" "}
+        <code>/api/webhooks/paypal</code> (payment confirmation),{" "}
+        <code>/api/webhooks/square</code> (POS) and{" "}
+        <code>/api/webhooks/facebook</code> (community comments). Signed
+        requests are required whenever a secret is configured.
       </div>
     </>
   );

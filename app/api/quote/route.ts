@@ -5,6 +5,8 @@ import { computePricing, type Channel } from "@/lib/pricing";
 import { quoteDelivery } from "@/lib/delivery";
 import { addressHash, signQuote } from "@/lib/quotes";
 import { getSettingNumber } from "@/lib/settings";
+import { validatePromotion, PromotionError } from "@/lib/promotions";
+import { coordinate, estimateCoordinates, SYDNEY_CBD } from "@/lib/geo";
 
 export const dynamic = "force-dynamic";
 
@@ -18,6 +20,9 @@ type Body = {
   customerName?: string;
   phone?: string;
   notes?: string;
+  promoCode?: string;
+  deliveryLat?: number | null;
+  deliveryLng?: number | null;
 };
 
 /** Pricing + live courier quote preview for the checkout. */
@@ -56,6 +61,12 @@ export async function POST(request: Request) {
     let quoteToken: string | undefined;
 
     if (channel === "delivery" && hasAddress) {
+      const fallback = estimateCoordinates(
+        body.address ?? "",
+        body.suburb ?? "",
+        body.postcode ?? "",
+        SYDNEY_CBD,
+      );
       delivery = await quoteDelivery({
         orderCode: "QUOTE",
         customerName: body.customerName || "Guest",
@@ -64,6 +75,8 @@ export async function POST(request: Request) {
         dropoffSuburb: body.suburb,
         dropoffPostcode: body.postcode,
         dropoffNotes: body.notes,
+        dropoffLat: coordinate(body.deliveryLat) ?? fallback.lat,
+        dropoffLng: coordinate(body.deliveryLng) ?? fallback.lng,
         orderValueCents: subtotalCents,
       });
       quoteToken = signQuote({
@@ -80,15 +93,49 @@ export async function POST(request: Request) {
       });
     }
 
+    // A promo code is checked here for the preview AND again when the order
+    // is created, so a tampered client cannot get a discount for free.
+    let promotion: {
+      code: string;
+      label: string;
+      discountCents: number;
+      kind: string;
+    } | null = null;
+    let promotionError: string | null = null;
+    if (body.promoCode?.trim()) {
+      try {
+        const check = await validatePromotion(db, body.promoCode, {
+          subtotalCents,
+          channel,
+          deliveryFeeCents: delivery?.customerFeeCents ?? 0,
+        });
+        promotion = {
+          code: check.promotion.code,
+          label: check.label,
+          discountCents: check.discountCents,
+          kind: check.promotion.kind,
+        };
+      } catch (error) {
+        promotionError =
+          error instanceof PromotionError
+            ? error.message
+            : "Could not apply that promotion";
+      }
+    }
+
     const pricing = await computePricing(db, {
       subtotalCents,
       channel,
       priority: Boolean(body.priority),
       delivery,
+      discountCents: promotion?.discountCents ?? 0,
+      promotionLabel: promotion?.label,
     });
 
     return NextResponse.json({
       pricing,
+      promotion,
+      promotionError,
       quoteToken,
       delivery: delivery
         ? {
@@ -99,6 +146,9 @@ export async function POST(request: Request) {
             etaMinutes: delivery.etaMinutes,
             live: delivery.live,
             expiresAt: delivery.expiresAt,
+            distanceKm:
+              (delivery.raw as { distanceKm?: number } | undefined)
+                ?.distanceKm ?? null,
             fallbackReason:
               (delivery.raw as { fallbackReason?: string } | undefined)
                 ?.fallbackReason ?? null,

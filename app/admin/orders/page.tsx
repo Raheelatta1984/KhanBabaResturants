@@ -5,6 +5,7 @@ import { formatDateTime } from "@/lib/time";
 import { money } from "@/lib/money";
 import { StatusBadge } from "@/components/ui";
 import { AutoRefresh } from "@/components/portal/AutoRefresh";
+import { ReturnActionButton } from "@/components/ReturnActionButton";
 
 export const dynamic = "force-dynamic";
 
@@ -138,13 +139,16 @@ export default async function AdminOrdersPage({
                     <div className="tiny muted">{order.progress}%</div>
                   </td>
                   <td>
-                    <Link
-                      href={`/order/${order.code}`}
-                      target="_blank"
-                      className="btn btn-ghost btn-sm"
-                    >
-                      View
-                    </Link>
+                    <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+                      <Link
+                        href={`/order/${order.code}`}
+                        target="_blank"
+                        className="btn btn-ghost btn-sm"
+                      >
+                        View
+                      </Link>
+                      <ReturnActionButton orderCode={order.code} />
+                    </div>
                   </td>
                 </tr>
               ))

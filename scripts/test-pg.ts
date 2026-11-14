@@ -7,8 +7,8 @@
  * It drives the application's own modules (not a re-implementation): the schema,
  * the seed, order creation for all four channels, the counter → kitchen → ready
  * hand-offs, courier quoting/dispatch/tracking, a production batch that posts
- * material costs, settings, pricing rules, reviews, release notes and the
- * health payload's row counts.
+ * material costs, settings, pricing rules, reviews, release notes, the ERP
+ * expansion modules and the health payload's row counts.
  */
 import { createHarness } from "./lib/pglite";
 import { setDbFactory, getDb } from "../lib/db";
@@ -58,6 +58,7 @@ import {
 } from "../lib/catalog";
 import { priceCart } from "../lib/cart";
 import {
+  DEFAULT_COMMUNITY_AUTO_REPLY,
   getSetting,
   getSettingNumber,
   getSettings,
@@ -116,6 +117,18 @@ import {
   describeDatabaseTarget,
   supabaseUrlProjectRef,
 } from "../lib/db";
+import { PAYMENT_OPTIONS, enabledPaymentOptions } from "../lib/payments";
+import { validatePromotion } from "../lib/promotions";
+import {
+  atoReportCsv,
+  driverAtoReport,
+  financialYear,
+} from "../lib/drivers";
+import {
+  claimOfferByToken,
+  publicOffers,
+} from "../lib/community";
+import { squareStatus, syncSquare } from "../lib/integrations/square";
 
 let passed = 0;
 const failures: string[] = [];
@@ -1036,9 +1049,10 @@ async function main() {
     "SELECT code FROM orders WHERE code LIKE 'KB-DEMO%' ORDER BY code",
   );
   check(
-    "demo orders KB-DEMO01..06 present",
-    demoOrders.length === 6,
-    demoOrders.length,
+    "demo orders KB-DEMO01..07 present",
+    demoOrders.length === 7 &&
+      demoOrders.some((row) => row.code === "KB-DEMO07"),
+    demoOrders.map((row) => row.code),
   );
 
   // dashboard queries copied from app/admin/page.tsx
@@ -1109,6 +1123,11 @@ async function main() {
     tables: await count(db, "dining_tables"),
     orders: await count(db, "orders"),
     materials: await count(db, "materials"),
+    drivers: await count(db, "drivers"),
+    promotions: await count(db, "promotions"),
+    communityOffers: await count(db, "community_offers"),
+    squareTransactions: await count(db, "square_transactions"),
+    deliveryJobs: await count(db, "delivery_jobs"),
   };
   check(
     "health counts are real numbers",
@@ -1116,6 +1135,134 @@ async function main() {
       (value) => typeof value === "number" && value > 0,
     ),
     counts,
+  );
+
+  // --------------------------------------------------------- ERP expansion
+  section("ERP expansion (drivers, promotions, community, Square)");
+  const approvedDriver = await db.one<{ id: number; status: string }>(
+    "SELECT id, status FROM drivers WHERE code = 'KB-DRV-001'",
+  );
+  const verifiedDocs = await db.one<{ c: number }>(
+    "SELECT COUNT(*) AS c FROM driver_documents WHERE driver_id = $1 AND status = 'verified'",
+    [approvedDriver.id],
+  );
+  check(
+    "approved driver passed all seven verification checks",
+    approvedDriver.status === "approved" && Number(verifiedDocs.c) === 7,
+    verifiedDocs.c,
+  );
+  const ato = await driverAtoReport(db, approvedDriver.id, financialYear());
+  check(
+    "ATO report uses 91c/km and the 5,000 km cap",
+    ato.rate === 91 && ato.capKm === 5000 && ato.totalKm === 3.8 && ato.claimCents === 346,
+    ato,
+  );
+  check(
+    "ATO CSV includes the trip and a TOTAL row",
+    atoReportCsv(ato).includes("KB-DEMO06") && atoReportCsv(ato).includes("TOTAL"),
+  );
+  const liveJob = await db.one<{ c: number }>(
+    `SELECT COUNT(*) AS c FROM delivery_jobs j JOIN orders o ON o.id = j.order_id
+      WHERE o.code = 'KB-DEMO07' AND j.driver_id = $1 AND j.status = 'dropoff'`,
+    [approvedDriver.id],
+  );
+  const pings = await db.one<{ c: number }>(
+    "SELECT COUNT(*) AS c FROM driver_location_pings WHERE driver_id = $1",
+    [approvedDriver.id],
+  );
+  check(
+    "live own-fleet job has GPS breadcrumbs for the map",
+    Number(liveJob.c) === 1 && Number(pings.c) >= 4,
+    { liveJob: liveJob.c, pings: pings.c },
+  );
+
+  const promotion = await validatePromotion(db, "welcome10", {
+    subtotalCents: 3000,
+    channel: "pickup",
+  });
+  check(
+    "customer promotion re-validates on the server",
+    promotion.discountCents === 300 && promotion.promotion.code === "WELCOME10",
+    promotion.discountCents,
+  );
+  const settings = await getSettings();
+  const enabled = enabledPaymentOptions(settings);
+  check(
+    "Visa, Mastercard, Amex, Afterpay and PayPal are available",
+    ["card_visa", "card_mastercard", "card_amex", "afterpay", "paypal"].every(
+      (id) => PAYMENT_OPTIONS.some((option) => option.id === id) && enabled.includes(id as never),
+    ),
+    enabled,
+  );
+
+  const offers = await publicOffers(db);
+  const openOffer = offers.find((offer) => offer.status === "posted");
+  check(
+    "community board exposes posted and claimed offers",
+    offers.length >= 2 && Boolean(openOffer),
+    offers.map((offer) => ({ status: offer.status, token: offer.token })),
+  );
+  if (openOffer) {
+    const claimed = await claimOfferByToken(db, openOffer.token, {
+      name: "Test Neighbour",
+      keyword: "MINE",
+    });
+    check(
+      "first claim wins, closes comments and uses the exact auto-reply",
+      claimed.status === "claimed" &&
+        claimed.comments_closed &&
+        claimed.auto_reply_text === DEFAULT_COMMUNITY_AUTO_REPLY &&
+        Boolean(claimed.claim_order_code?.startsWith("KB-GIVE-")),
+      { status: claimed.status, autoReply: claimed.auto_reply_text },
+    );
+    const autoReply = await db.one<{ c: number }>(
+      `SELECT COUNT(*) AS c FROM community_offer_events
+        WHERE offer_id = $1 AND kind = 'auto_reply' AND detail = $2`,
+      [claimed.id, DEFAULT_COMMUNITY_AUTO_REPLY],
+    );
+    check(
+      "the exact thank-you comment is written to the audit log",
+      Number(autoReply.c) === 1,
+      autoReply.c,
+    );
+    if (claimed.claim_order_code) {
+      const ticket = await db.one<{ channel: string; total_cents: number }>(
+        "SELECT channel, total_cents FROM orders WHERE code = $1",
+        [claimed.claim_order_code],
+      );
+      check(
+        "community claim creates a zero-cost click & collect ticket",
+        ticket.channel === "pickup" && ticket.total_cents === 0,
+        ticket,
+      );
+    }
+    let secondClaimRejected = false;
+    try {
+      await claimOfferByToken(db, openOffer.token, {
+        name: "Too Late",
+        keyword: "MINE",
+      });
+    } catch {
+      secondClaimRejected = true;
+    }
+    check("a second claim is refused", secondClaimRejected);
+  }
+
+  const ordersBeforeSquare = await count(db, "orders");
+  const squareBefore = await squareStatus(db);
+  const squareSync = await syncSquare(db, { limit: 5, sinceDays: 2 });
+  const squareAfter = await squareStatus(db);
+  check(
+    "Square sync runs out-of-band without changing orders",
+    squareSync.mode !== "disabled" &&
+      squareAfter.records > squareBefore.records &&
+      (await count(db, "orders")) === ordersBeforeSquare,
+    { before: squareBefore.records, after: squareAfter.records, sync: squareSync },
+  );
+  check(
+    "Square POS data is mirrored in its own detached tables",
+    squareAfter.transactions > 0 && squareAfter.outbound > 0,
+    squareAfter,
   );
 
   // ------------------------------------------------------- connection wiring
