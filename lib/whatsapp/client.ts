@@ -30,35 +30,77 @@ export type WhatsAppConfig = {
   displayNumber: string;
   currency: string;
   mode: "live" | "sandbox";
+  /**
+   * Where each value came from: a host environment variable (Vercel → Settings
+   * → Environment Variables), the settings table (Admin → WhatsApp Business),
+   * or nowhere. The go-live checklist in the portal is built from this, so a
+   * half-configured deployment says exactly what is missing instead of guessing.
+   */
+  sources: Record<
+    | "phoneNumberId"
+    | "accessToken"
+    | "businessAccountId"
+    | "catalogId"
+    | "verifyToken"
+    | "appSecret"
+    | "counterNumber"
+    | "displayNumber",
+    "env" | "settings" | "none"
+  >;
 };
 
 const GRAPH_BASE = "https://graph.facebook.com/v21.0";
 
-function envOr(envKey: string, fallback: string): string {
-  return (process.env[envKey] ?? "").trim() || fallback;
+type Resolved = { value: string; source: "env" | "settings" | "none" };
+
+function resolve(envKey: string, setting: string): Resolved {
+  const fromEnv = (process.env[envKey] ?? "").trim();
+  if (fromEnv) return { value: fromEnv, source: "env" };
+  const trimmed = (setting ?? "").trim();
+  if (trimmed) return { value: trimmed, source: "settings" };
+  return { value: "", source: "none" };
 }
 
 /** Resolve the channel configuration. Environment variables win over settings. */
 export async function whatsappConfig(): Promise<WhatsAppConfig> {
   const settings = await getSettings();
   const value = (key: string) => settingValue(settings, key, "");
-  const phoneNumberId = envOr("WHATSAPP_PHONE_NUMBER_ID", value("whatsapp_phone_number_id"));
-  const accessToken = envOr("WHATSAPP_ACCESS_TOKEN", value("whatsapp_access_token"));
+  const phoneNumberId = resolve("WHATSAPP_PHONE_NUMBER_ID", value("whatsapp_phone_number_id"));
+  const accessToken = resolve("WHATSAPP_ACCESS_TOKEN", value("whatsapp_access_token"));
+  const businessAccountId = resolve(
+    "WHATSAPP_BUSINESS_ACCOUNT_ID",
+    value("whatsapp_business_account_id"),
+  );
+  const catalogId = resolve("WHATSAPP_CATALOG_ID", value("whatsapp_catalog_id"));
+  const verifyToken = resolve("WHATSAPP_VERIFY_TOKEN", value("whatsapp_verify_token"));
+  const appSecret = resolve("WHATSAPP_APP_SECRET", value("whatsapp_app_secret"));
+  const counterNumber = resolve("WHATSAPP_COUNTER_NUMBER", value("whatsapp_counter_number"));
+  const displayNumber = resolve("WHATSAPP_DISPLAY_NUMBER", value("whatsapp_display_number"));
   const enabled = value("whatsapp_enabled") !== "0";
-  const configured = Boolean(phoneNumberId && accessToken);
+  const configured = Boolean(phoneNumberId.value && accessToken.value);
   return {
     enabled,
     configured,
-    phoneNumberId,
-    businessAccountId: envOr("WHATSAPP_BUSINESS_ACCOUNT_ID", value("whatsapp_business_account_id")),
-    accessToken,
-    catalogId: envOr("WHATSAPP_CATALOG_ID", value("whatsapp_catalog_id")),
-    verifyToken: envOr("WHATSAPP_VERIFY_TOKEN", value("whatsapp_verify_token")),
-    appSecret: envOr("WHATSAPP_APP_SECRET", value("whatsapp_app_secret")),
-    counterNumber: envOr("WHATSAPP_COUNTER_NUMBER", value("whatsapp_counter_number")),
-    displayNumber: envOr("WHATSAPP_DISPLAY_NUMBER", value("whatsapp_display_number")),
+    phoneNumberId: phoneNumberId.value,
+    businessAccountId: businessAccountId.value,
+    accessToken: accessToken.value,
+    catalogId: catalogId.value,
+    verifyToken: verifyToken.value,
+    appSecret: appSecret.value,
+    counterNumber: counterNumber.value,
+    displayNumber: displayNumber.value,
     currency: value("whatsapp_currency") || "AUD",
     mode: configured && enabled ? "live" : "sandbox",
+    sources: {
+      phoneNumberId: phoneNumberId.source,
+      accessToken: accessToken.source,
+      businessAccountId: businessAccountId.source,
+      catalogId: catalogId.source,
+      verifyToken: verifyToken.source,
+      appSecret: appSecret.source,
+      counterNumber: counterNumber.source,
+      displayNumber: displayNumber.source,
+    },
   };
 }
 

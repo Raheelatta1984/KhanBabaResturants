@@ -25,6 +25,10 @@ export const dynamic = "force-dynamic";
 
 export const metadata = { title: "WhatsApp Business" };
 
+/** The one-page setup guide, kept in the repo so it versions with the code. */
+const GO_LIVE_DOC =
+  "https://github.com/Raheelatta1984/KhanBabaResturants/blob/main/docs/whatsapp-go-live.md";
+
 /**
  * The WhatsApp Business centre.
  *
@@ -66,6 +70,57 @@ export default async function AdminWhatsAppPage() {
     "Assalam-o-Alaikum Khan Baba! I would like to order.",
   );
   const counterNumber = settingValue(settings, "whatsapp_counter_number", "");
+
+  // The go-live checklist: one row per value the channel needs, whether it is
+  // already present (and from where) and the shortest possible hint on where it
+  // comes from. Everything is read server-side; no secret is ever sent to the
+  // browser, only its presence.
+  const goLive: {
+    field: keyof typeof config.sources;
+    env: string;
+    label: string;
+    hint: string;
+    required: boolean;
+  }[] = [
+    {
+      field: "phoneNumberId",
+      env: "WHATSAPP_PHONE_NUMBER_ID",
+      label: "Phone number id",
+      hint: "Meta → WhatsApp → API setup",
+      required: true,
+    },
+    {
+      field: "accessToken",
+      env: "WHATSAPP_ACCESS_TOKEN",
+      label: "Permanent access token",
+      hint: "Meta → System user → token with whatsapp_business_messaging",
+      required: true,
+    },
+    {
+      field: "verifyToken",
+      env: "WHATSAPP_VERIFY_TOKEN",
+      label: "Webhook verify token",
+      hint: "Any passphrase — the same string goes into Meta's webhook form",
+      required: true,
+    },
+    {
+      field: "appSecret",
+      env: "WHATSAPP_APP_SECRET",
+      label: "App secret (signature check)",
+      hint: "Meta → App settings → Basic → App secret",
+      required: true,
+    },
+    {
+      field: "catalogId",
+      env: "WHATSAPP_CATALOG_ID",
+      label: "Catalogue id",
+      hint: "Commerce Manager → Catalogue → Settings",
+      required: false,
+    },
+  ];
+  const missing = goLive.filter(
+    (row) => row.required && config.sources[row.field] === "none",
+  );
 
   return (
     <>
@@ -123,6 +178,47 @@ export default async function AdminWhatsAppPage() {
             <div><span>Phone number id</span><b>{config.phoneNumberId ? `${config.phoneNumberId.slice(0, 6)}…` : "not set"}</b></div>
             <div><span>Catalogue id</span><b>{config.catalogId ? `${config.catalogId.slice(0, 6)}…` : "not set"}</b></div>
             <div><span>Webhook</span><b className="tiny mono">{baseUrl}/api/webhooks/whatsapp</b></div>
+          </div>
+
+          <div style={{ marginTop: 16 }}>
+            <div className="row" style={{ gap: 8, justifyContent: "space-between", alignItems: "center" }}>
+              <b className="small">Go-live variables</b>
+              <a className="tiny" href={GO_LIVE_DOC} target="_blank" rel="noreferrer">
+                Setup guide ↗
+              </a>
+            </div>
+            <div className="kv" style={{ marginTop: 8 }}>
+              {goLive.map((row) => {
+                const source = config.sources[row.field];
+                return (
+                  <div key={row.env}>
+                    <span>
+                      {row.label}
+                      <br />
+                      <code className="tiny muted">{row.env}</code>
+                    </span>
+                    <b style={{ textAlign: "right" }}>
+                      <span
+                        className={`badge ${
+                          source === "none" ? (row.required ? "badge-red" : "badge-amber") : "badge-green"
+                        }`}
+                      >
+                        {source === "none" ? "missing" : source === "env" ? "Vercel env" : "portal setting"}
+                      </span>
+                      <br />
+                      <span className="tiny muted">{row.hint}</span>
+                    </b>
+                  </div>
+                );
+              })}
+            </div>
+            <p className="tiny muted" style={{ marginTop: 10 }}>
+              {missing.length === 0
+                ? "Every required value is present. Changes to Vercel environment variables need a redeploy before they reach the running functions."
+                : `${missing.length} required value${missing.length === 1 ? "" : "s"} still missing — the channel stays in sandbox and logs every message until the phone number id and access token are present.`}{" "}
+              Values can live in Vercel (Project → Settings → Environment Variables) or in the
+              portal settings below (stored in the database); Vercel wins when both are set.
+            </p>
           </div>
 
           {chatLink ? (

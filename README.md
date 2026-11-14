@@ -311,13 +311,26 @@ The Cloud API boundary lives in `lib/whatsapp/client.ts`: configuration (environ
 **Admin → WhatsApp Business**), text and call-to-action sends, catalogue publishing, webhook signature verification and
 the `whatsapp_messages` audit log. Nothing else in the app talks to Meta.
 
-1. Meta for Developers → your app → **WhatsApp → API setup**: copy the phone number id and a permanent access token
-   into `WHATSAPP_PHONE_NUMBER_ID` and `WHATSAPP_ACCESS_TOKEN`.
-2. Webhook URL `https://<your-domain>/api/webhooks/whatsapp`, verify token repeated in `WHATSAPP_VERIFY_TOKEN`,
-   subscribe to the **messages** field. Set `WHATSAPP_APP_SECRET` so every delivery is signature-checked.
-3. Commerce Manager → connect a catalogue, copy its id into `WHATSAPP_CATALOG_ID`, then press **Publish whole menu**
-   in **Admin → WhatsApp Business**.
-4. Put the counter's phone in `WHATSAPP_COUNTER_NUMBER` (or the settings field) — that is where new orders land.
+Five values switch it from sandbox to live, all as **Sensitive** environment variables in Vercel
+(Project → Settings → Environment Variables → Production, Preview and Development), followed by a redeploy:
+
+| Variable                   | From                                                     |
+| -------------------------- | -------------------------------------------------------- |
+| `WHATSAPP_PHONE_NUMBER_ID` | Meta → WhatsApp → **API setup**                           |
+| `WHATSAPP_ACCESS_TOKEN`    | Meta → **System user** → permanent token                  |
+| `WHATSAPP_VERIFY_TOKEN`    | You choose it; the same string goes into the webhook form |
+| `WHATSAPP_APP_SECRET`      | Meta → App settings → **Basic** → App secret              |
+| `WHATSAPP_CATALOG_ID`      | Commerce Manager → Catalogue → Settings                   |
+
+Then: webhook URL `https://<your-domain>/api/webhooks/whatsapp`, subscribe to the **messages** field, connect the
+catalogue to the WhatsApp account, press **Publish whole menu**, and put the counter's phone in
+`WHATSAPP_COUNTER_NUMBER` (or the settings field) — that is where new orders land.
+
+**Admin → WhatsApp Business** shows a *Go-live variables* checklist that marks each value as *Vercel env*, *portal
+setting* or *missing* (never the value itself), so a half-configured deployment says exactly what is absent. The
+full runbook — Meta app, permanent token, webhook handshake, catalogue, test number → real number, business
+verification, templates, the 24-hour window and troubleshooting — is in
+[docs/whatsapp-go-live.md](docs/whatsapp-go-live.md).
 
 Without those values the channel is labelled **sandbox** and every message is captured in the portal instead.
 
