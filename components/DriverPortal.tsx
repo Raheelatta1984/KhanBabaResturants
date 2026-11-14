@@ -64,7 +64,7 @@ export function DriverPortal({ initial }: { initial: DriverPortalData }) {
   const [soundNotification, setSoundNotification] = useState(initial.soundNotification ?? true);
   const [trackingIntervalKm, setTrackingIntervalKm] = useState(initial.trackingIntervalKm ?? 0.05);
   const watchId = useRef<number | null>(null);
-  const lastSent = useRef(0);
+  const lastSent = useRef<{ lat: number; lng: number; timestamp: number } | null>(null);
   const lastKm = useRef(0);
   const audioRef = useRef<HTMLAudioElement | null>(null);
 
@@ -101,12 +101,12 @@ export function DriverPortal({ initial }: { initial: DriverPortalData }) {
     // Calculate distance since last ping
     const currentLat = position.coords.latitude;
     const currentLng = position.coords.longitude;
-    const lastLat = lastSent.current > 0 ? (lastSent.current as any).lat : currentLat;
-    const lastLng = lastSent.current > 0 ? (lastSent.current as any).lng : currentLng;
+    const lastLat = lastSent.current ? lastSent.current.lat : currentLat;
+    const lastLng = lastSent.current ? lastSent.current.lng : currentLng;
     const distanceKm = calculateDistanceKm(lastLat, lastLng, currentLat, currentLng);
 
     // Configurable interval: 0.05 km (default)
-    if (lastSent.current > 0 && distanceKm < trackingIntervalKm && now - lastSent.current.timestamp < initial.intervalSeconds * 1000) {
+    if (lastSent.current && distanceKm < trackingIntervalKm && now - lastSent.current.timestamp < initial.intervalSeconds * 1000) {
       return;
     }
 

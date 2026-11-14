@@ -12,6 +12,7 @@ import {
 } from "@/lib/drivers";
 import { DriverPortal } from "@/components/DriverPortal";
 import { Icon } from "@/components/Icon";
+import { money } from "@/lib/money";
 
 export const dynamic = "force-dynamic";
 
@@ -42,6 +43,7 @@ export default async function DriverPortalPage({
       id: number;
       order_id: number;
       status: string;
+      customer_fee_cents: number;
     }>(
       `SELECT * FROM delivery_jobs WHERE driver_id = $1
         AND status IN ('requested','accepted','pickup','dropoff','delivered')
@@ -84,6 +86,7 @@ export default async function DriverPortalPage({
         postcode: string | null;
         delivery_lat: number | null;
         delivery_lng: number | null;
+        delivery_fee_cents: number;
         dispatched_at: string | null;
         status: string;
       }>("SELECT * FROM orders WHERE id = $1", [job.order_id])
@@ -158,6 +161,18 @@ export default async function DriverPortalPage({
                     postcode: order.postcode,
                     status: job.status,
                     tracking,
+                    summary: {
+                      amount: money(job.customer_fee_cents ?? order.delivery_fee_cents ?? 0),
+                      location: {
+                        address: order.address,
+                        suburb: order.suburb,
+                        postcode: order.postcode,
+                        lat: order.delivery_lat,
+                        lng: order.delivery_lng,
+                      },
+                      totalKm: tracking.distanceKm,
+                      estimatedTimeMinutes: tracking.etaMinutes,
+                    },
                   }
                 : null,
             ledger,

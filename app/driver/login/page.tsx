@@ -4,6 +4,7 @@ import { getDb } from "@/lib/db";
 import { getDriverCredential } from "@/lib/driver-credentials";
 import { getDriver } from "@/lib/drivers";
 import { DriverPortal } from "@/components/DriverPortal";
+import { money } from "@/lib/money";
 
 export const dynamic = "force-dynamic";
 
@@ -48,6 +49,7 @@ export default async function DriverLoginPage({
           id: number;
           order_id: number;
           status: string;
+          customer_fee_cents: number;
         }
       >(
         `SELECT * FROM delivery_jobs WHERE driver_id = $1
@@ -98,6 +100,7 @@ export default async function DriverLoginPage({
             postcode: string | null;
             delivery_lat: number | null;
             delivery_lng: number | null;
+            delivery_fee_cents: number;
             dispatched_at: string | null;
             status: string;
           }
@@ -123,7 +126,7 @@ export default async function DriverLoginPage({
     const { getSoundNotificationSetting, getTrackingIntervalSetting } =
       await import("@/lib/driver-credentials");
     const intervalSeconds =
-      Number((await getSettings()).driver_tracking_interval_seconds) || 15;
+      Number(settings.driver_tracking_interval_seconds) || 15;
     const soundNotification = await getSoundNotificationSetting(db);
     const trackingIntervalKm = await getTrackingIntervalSetting(db);
 
@@ -179,6 +182,18 @@ export default async function DriverLoginPage({
                       postcode: order.postcode,
                       status: job.status,
                       tracking,
+                      summary: {
+                        amount: money(job.customer_fee_cents ?? order.delivery_fee_cents ?? 0),
+                        location: {
+                          address: order.address,
+                          suburb: order.suburb,
+                          postcode: order.postcode,
+                          lat: order.delivery_lat,
+                          lng: order.delivery_lng,
+                        },
+                        totalKm: tracking.distanceKm,
+                        estimatedTimeMinutes: tracking.etaMinutes,
+                      },
                     }
                   : null,
               ledger,

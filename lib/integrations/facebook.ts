@@ -42,7 +42,7 @@ export async function facebookConfigured(): Promise<boolean> {
   return Boolean(config.pageId && config.accessToken);
 }
 
-async function graph(
+export async function graph(
   path: string,
   config: FacebookConfig,
   init: RequestInit = {},
