@@ -52,8 +52,11 @@ else
   echo "  FAIL promotion preview: $PROMO_QUOTE"
   fail=1
 fi
+# A real address inside a published zone. This used the Sydney CBD (2000) because
+# the kitchen was assumed to be on Pitt Street; it is in Whalan 2770, and the CBD
+# is now correctly refused — so a CBD fixture would fail for the right reason.
 DELIVERY_QUOTE=$(curl -s -X POST "$BASE/api/quote" -H 'content-type: application/json' \
-  -d '{"channel":"delivery","address":"1 Test Street","suburb":"Sydney","postcode":"2000","deliveryLat":-33.8711,"deliveryLng":151.2063,"items":[{"variantId":1,"qty":3}]}')
+  -d '{"channel":"delivery","address":"7 Bulolo Drive","suburb":"Whalan","postcode":"2770","deliveryLat":-33.7595,"deliveryLng":150.8105,"items":[{"variantId":1,"qty":3}]}')
 QUOTE_TOKEN=$(printf '%s' "$DELIVERY_QUOTE" | grep -o '"quoteToken":"[^"]*"' | head -1 | cut -d'"' -f4)
 if [ -n "$QUOTE_TOKEN" ]; then
   echo "  ok   delivery quote carries a signed token"
@@ -62,12 +65,12 @@ else
   fail=1
 fi
 PROMO_ORDER_JSON=$(curl -s -X POST "$BASE/api/orders" -H 'content-type: application/json' \
-  -d "{\"channel\":\"delivery\",\"customerName\":\"Promo Smoke\",\"phone\":\"0400000001\",\"email\":\"promo@example.com\",\"address\":\"1 Test Street\",\"suburb\":\"Sydney\",\"postcode\":\"2000\",\"deliveryLat\":-33.8711,\"deliveryLng\":151.2063,\"paymentMethod\":\"online\",\"paymentOption\":\"card_visa\",\"paymentLast4\":\"4242\",\"promoCode\":\"WELCOME10\",\"quoteToken\":\"$QUOTE_TOKEN\",\"items\":[{\"itemId\":1,\"variantId\":1,\"qty\":3}]}")
+  -d "{\"channel\":\"delivery\",\"customerName\":\"Promo Smoke\",\"phone\":\"0400000001\",\"email\":\"promo@example.com\",\"address\":\"7 Bulolo Drive\",\"suburb\":\"Whalan\",\"postcode\":\"2770\",\"deliveryLat\":-33.7595,\"deliveryLng\":150.8105,\"paymentMethod\":\"online\",\"paymentOption\":\"card_visa\",\"paymentLast4\":\"4242\",\"promoCode\":\"WELCOME10\",\"quoteToken\":\"$QUOTE_TOKEN\",\"items\":[{\"itemId\":1,\"variantId\":1,\"qty\":3}]}")
 PROMO_ORDER_CODE=$(printf '%s' "$PROMO_ORDER_JSON" | sed -n 's/.*"code":"\([^"]*\)".*/\1/p')
 if [ -n "$PROMO_ORDER_CODE" ] && \
    curl -s "$BASE/api/orders/$PROMO_ORDER_CODE" | grep -q '"promotionCode":"WELCOME10"' && \
    curl -s "$BASE/api/orders/$PROMO_ORDER_CODE" | grep -q '"paymentOptionLabel":"Visa"' && \
-   curl -s "$BASE/api/orders/$PROMO_ORDER_CODE" | grep -q '"deliveryLat":-33.8711'; then
+   curl -s "$BASE/api/orders/$PROMO_ORDER_CODE" | grep -q '"deliveryLat":-33.7595'; then
   echo "  ok   promo, option and latitude/longitude persisted on the order"
   check "/order/$PROMO_ORDER_CODE"
 else
@@ -77,7 +80,7 @@ fi
 
 echo "Driver onboarding"
 DRIVER_APPLY=$(curl -s -X POST "$BASE/api/driver/apply" -H 'content-type: application/json' \
-  -d '{"firstName":"Smoke","lastName":"Driver","email":"smoke.driver@example.com","phone":"0400000002","vehicleType":"car","licenceNumber":"NSW-SMOKE-1","abn":"12345678901","rightToWorkCountry":"Australia","payId":"smoke.driver@example.com","address":"2 Test Street","suburb":"Sydney","postcode":"2000","baseLat":-33.8701,"baseLng":151.2071,"termsAccepted":true,"privacyAccepted":true,"documents":{"photo_id":"SMOKE-ID","licence":"NSW-SMOKE-1"}}')
+  -d '{"firstName":"Smoke","lastName":"Driver","email":"smoke.driver@example.com","phone":"0400000002","vehicleType":"car","licenceNumber":"NSW-SMOKE-1","abn":"12345678901","rightToWorkCountry":"Australia","payId":"smoke.driver@example.com","address":"9 Bulolo Drive","suburb":"Whalan","postcode":"2770","baseLat":-33.7585,"baseLng":150.8065,"termsAccepted":true,"privacyAccepted":true,"documents":{"photo_id":"SMOKE-ID","licence":"NSW-SMOKE-1"}}')
 if printf '%s' "$DRIVER_APPLY" | grep -q '"ok":true'; then
   echo "  ok   driver application created with verification records"
 else
@@ -126,7 +129,7 @@ else
   fail=1
 fi
 code=$(curl -s -b "$CUSTJAR" -o /dev/null -w "%{http_code}" -X POST "$BASE/api/customer/profile" \
-  -H 'content-type: application/json' -d '{"name":"Smoke Customer","address":"1 Test Street","suburb":"Sydney","postcode":"2000"}')
+  -H 'content-type: application/json' -d '{"name":"Smoke Customer","address":"7 Bulolo Drive","suburb":"Whalan","postcode":"2770"}')
 if [ "$code" = "200" ]; then echo "  ok   200 POST /api/customer/profile"; else echo "  FAIL $code POST /api/customer/profile"; fail=1; fi
 # Signing in again must work with the stored scrypt hash.
 code=$(curl -s -c "$CUSTJAR" -o /dev/null -w "%{http_code}" -X POST "$BASE/api/customer/auth" -H 'content-type: application/json' \
@@ -214,11 +217,10 @@ else
   echo "  FAIL music snapshot: $NOW_JSON"
   fail=1
 fi
-for action in pause resume replay next; do
-  code=$(curl -s -b "$JAR" -o /dev/null -w "%{http_code}" -X POST "$BASE/api/ops/music" \
-    -H 'content-type: application/json' -d "{\"action\":\"$action\"}")
-  if [ "$code" = "200" ]; then echo "  ok   200 music $action"; else echo "  FAIL $code music $action"; fail=1; fi
-done
+# Order matters here. Resume/replay/next refuse with 400 "Nothing queued —
+# start a collection first" on a fresh database, and that is correct behaviour,
+# not a fault: there is no track to resume. So this queues something first and
+# only then asserts the transport controls work.
 MUSIC_TRACK=$(curl -s -b "$JAR" -X POST "$BASE/api/ops/music" -H 'content-type: application/json' \
   -d '{"action":"create-track","title":"Smoke track","url":"https://example.com/smoke.mp3","kind":"music","category":"ghazal"}')
 if printf '%s' "$MUSIC_TRACK" | grep -q '"ok":true'; then
@@ -227,6 +229,34 @@ else
   echo "  FAIL create track: $MUSIC_TRACK"
   fail=1
 fi
+
+echo "Resume with nothing queued is refused, not crashed"
+code=$(curl -s -b "$JAR" -o /dev/null -w "%{http_code}" -X POST "$BASE/api/ops/music" \
+  -H 'content-type: application/json' -d '{"action":"resume"}')
+if [ "$code" = "400" ]; then echo "  ok   400 resume with an empty queue"; else echo "  FAIL $code resume with an empty queue"; fail=1; fi
+
+MUSIC_COLLECTION=$(curl -s -b "$JAR" -X POST "$BASE/api/ops/music" -H 'content-type: application/json' \
+  -d '{"action":"create-collection","name":"Smoke collection","kind":"music"}' | sed -n 's/.*"id":\([0-9]*\).*/\1/p')
+if [ -n "$MUSIC_COLLECTION" ]; then
+  echo "  ok   a collection can be created"
+  TRACK_ID=$(printf '%s' "$MUSIC_TRACK" | sed -n 's/.*"id":\([0-9]*\).*/\1/p')
+  code=$(curl -s -b "$JAR" -o /dev/null -w "%{http_code}" -X POST "$BASE/api/ops/music" \
+    -H 'content-type: application/json' \
+    -d "{\"action\":\"add-track\",\"collectionId\":$MUSIC_COLLECTION,\"trackId\":$TRACK_ID}")
+  if [ "$code" = "200" ]; then echo "  ok   the track joins the collection"; else echo "  FAIL $code add track to collection"; fail=1; fi
+  code=$(curl -s -b "$JAR" -o /dev/null -w "%{http_code}" -X POST "$BASE/api/ops/music" \
+    -H 'content-type: application/json' -d "{\"action\":\"play\",\"collectionId\":$MUSIC_COLLECTION}")
+  if [ "$code" = "200" ]; then echo "  ok   200 music play"; else echo "  FAIL $code music play-collection"; fail=1; fi
+else
+  echo "  FAIL could not create a music collection"
+  fail=1
+fi
+
+for action in pause resume replay next; do
+  code=$(curl -s -b "$JAR" -o /dev/null -w "%{http_code}" -X POST "$BASE/api/ops/music" \
+    -H 'content-type: application/json' -d "{\"action\":\"$action\"}")
+  if [ "$code" = "200" ]; then echo "  ok   200 music $action"; else echo "  FAIL $code music $action"; fail=1; fi
+done
 if curl -s -X POST "$BASE/api/music/request" -H 'content-type: application/json' \
    -d '{"customerName":"Smoke Guest","title":"No link","url":"nope"}' | grep -q 'link to the song is required'; then
   echo "  ok   a guest song request needs a URL"

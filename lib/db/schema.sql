@@ -982,3 +982,11 @@ ON CONFLICT (key) DO NOTHING;
 -- delivery pricing must only trust a verified pin: an estimate spread across
 -- ~10 km would otherwise decide the fee and the serviceable area.
 ALTER TABLE orders ADD COLUMN IF NOT EXISTS delivery_coords_verified BOOLEAN NOT NULL DEFAULT FALSE;
+
+-- The driver verification trail references the document it is about, so an
+-- admin can see "licence rejected" against the licence row rather than a line
+-- of prose. `logDriverEvent` has always written this column; the table was
+-- created without it, so every driver application failed with a 42703 and the
+-- public form answered "please try again".
+ALTER TABLE driver_verification_events
+  ADD COLUMN IF NOT EXISTS document_id INTEGER REFERENCES driver_documents(id) ON DELETE SET NULL;
