@@ -15,10 +15,10 @@
  * - Document attachment & audit log for staff review
  */
 
-import type { Db } from "../db";
-import { hashPassword, verifyPassword } from "../auth/password";
-import { DriverError } from "../drivers";
-import { getSettingNumber } from "../settings";
+import type { Db } from "./db";
+import { hashPassword, verifyPassword } from "./auth/password";
+import { DriverError } from "./drivers";
+import { getSettingNumber } from "./settings";
 
 export type DriverCredential = {
   id: number;
