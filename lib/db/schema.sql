@@ -1161,6 +1161,7 @@ CREATE TABLE IF NOT EXISTS chat_ai_quota (
 );
 ALTER TABLE chat_ai_quota ENABLE ROW LEVEL SECURITY;
 ALTER TABLE chat_conversations ADD COLUMN IF NOT EXISTS handoff_after_message_id INTEGER;
+ALTER TABLE chat_conversations ADD COLUMN IF NOT EXISTS customer_id INTEGER REFERENCES customers(id) ON DELETE SET NULL;
 CREATE INDEX IF NOT EXISTS chat_conversations_updated_at ON chat_conversations(updated_at);
 CREATE TABLE IF NOT EXISTS chat_rate_limits (
   client_hash TEXT NOT NULL,

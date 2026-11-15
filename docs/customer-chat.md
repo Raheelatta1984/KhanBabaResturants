@@ -1,26 +1,48 @@
-# Customer chat: deployment and privacy
+# Customer chat: deployment, recommendations and privacy
 
-The `/chat` page offers an optional OpenAI menu assistant and a handoff to
-`/counter/chat`. Orders still go through the existing menu and checkout; the
-assistant does not submit orders, take payment, verify allergens or guarantee
-that its suggestions are correct. Guests can call if chat is unavailable.
+The `/chat` page supports direct counter-staff chat even when `OPENAI_API_KEY`
+and `OPENAI_CHAT_MODEL` are empty, and automatically enables the OpenAI menu
+assistant once both variables are configured and deployed.
+
+Alongside the chat transcript, `/chat` offers:
+- **Today's specials**: a deterministic **Dessert of the Day** and **Drink of
+  the Day** rotated daily in `Australia/Sydney` time from currently available
+  menu items.
+- **Menu & cart suggestions**: when a customer is signed in, suggestions adapt
+  to their **last five non-cancelled purchases** (respecting availability and
+  vegetarian-only history) and their current cart. Signed-out visitors see
+  general popular picks and today's specials without any personal history.
+- **Add to cart → Checkout**: guests can add suggested dishes, daily specials,
+  or dishes mentioned in chat replies directly to the shared cart and continue
+  into the existing `/checkout` and payment flow. Neither the AI nor chat
+  submits orders or takes payment directly.
 
 ## Before enabling in production
 
 1. Provision a random 32-byte key (`openssl rand -hex 32`) as the sensitive
    `CHAT_ENCRYPTION_KEY` environment variable. Keep a secure, independent backup.
-   Missing or invalid keys disable chat. All message bodies use AES-256-GCM with
-   random nonces and conversation/sender authenticated data. This is server-side
-   encryption at rest, **not end-to-end encryption**. During rotation, place
-   previous keys in `CHAT_OLD_ENCRYPTION_KEYS` (comma-separated, at most five),
-   and retain them until old records and backups expire. Back up all keys safely.
-2. To enable AI, configure `OPENAI_API_KEY` and `OPENAI_CHAT_MODEL` in the host's
-   secret store and redeploy. Without them, the customer can still request a
-   counter person. AI sends recent messages and the published available menu to
-   OpenAI. The UI asks for consent and warns guests not to enter personal or
-   payment information. Simple email/telephone masking is best effort, not a
-   reliable PII detector. Review the provider's data retention and contractual
-   terms before deployment. Do not use real personal data for testing.
+   Missing or invalid keys disable chat. All chat message bodies use AES-256-GCM
+   with random nonces and conversation/sender authenticated data. This is
+   server-side encryption at rest, **not end-to-end encryption**. During
+   rotation, place previous keys in `CHAT_OLD_ENCRYPTION_KEYS` (comma-separated,
+   at most five), and retain them until old records and backups expire. Back up
+   all keys safely.
+2. **Staff-only vs AI-enabled mode**:
+   - When `OPENAI_API_KEY` or `OPENAI_CHAT_MODEL` is empty (or blank whitespace),
+     `/chat` runs in **counter-staff mode**: starting a chat immediately opens a
+     counter conversation (`status = 'waiting'`, `handoff_after_message_id = 0`)
+     so guests can talk to counter staff at `/counter/chat` without any OpenAI
+     configuration.
+   - Once both `OPENAI_API_KEY` and `OPENAI_CHAT_MODEL` are set in the host's
+     environment and redeployed, AI menu chat becomes available automatically
+     (alongside direct counter chat and AI-to-staff handoff).
+   - AI sends recent messages (with best-effort email/phone masking, not a
+     reliable PII detector), the published available menu, today's Dessert/Drink
+     of the Day, and (for signed-in guests) de-identified dish/category/spice
+     hints from their last five orders and current cart to OpenAI — never the
+     customer's name, email, phone, address, customer ID, order codes or
+     timestamps. Review the provider's data retention and contractual terms
+     before enabling AI. Do not use real personal data for testing.
 3. Deploy behind HTTPS; review existing staff accounts, access and default
    passwords. Chat tables have RLS enabled with no API-role policies, and the
    application database role must be able to use them. Verify permissions on the
@@ -38,23 +60,42 @@ that its suggestions are correct. Guests can call if chat is unavailable.
    large backlogs, database backups and provider retention can extend storage;
    monitor the cron and apply a separate backup/provider retention policy.
 
-Customers see their own transcript; counter/manager staff can read only active
-handoffs and only messages sent after the handoff. Administrators can read the
-separate archive, including pre-handoff AI exchanges. Chat access and staff
-mutations are audited without message bodies; metadata such as timestamps and
-conversation IDs is not encrypted. Customers can close a conversation; archived
-conversations are no longer visible to counter staff. This does not encrypt
-existing orders, customer profiles, delivery records, operational logs or other
-application PII. Those existing schemas use searchable plaintext and require a
-separate inventory, migration, key-management and recovery plan before an
-application-wide encryption claim can be made.
+## Privacy & access-control boundaries
+
+- **Customer purchase history isolation**: `/api/chat/suggestions` and
+  `/api/chat` resolve customer identity exclusively from the HMAC-signed
+  `kb_customer` session cookie (verifying the account is active). Any
+  `customerId`, `email` or similar parameter in query strings or request bodies
+  is ignored. Responses include `Cache-Control: no-store, private` and
+  `Vary: Cookie`, and contain no customer PII or order codes.
+- **Shared-browser conversation isolation**: signed-in chat conversations are
+  bound to `chat_conversations.customer_id`. Logging out or signing into a
+  different customer account on the same browser prevents access to the previous
+  customer's transcript.
+- **Staff handoff boundary**: counter/manager staff can read only active
+  counter conversations (`status = 'waiting'`). For AI handoffs, counter staff
+  see only messages sent after the handoff; pre-handoff AI exchanges remain
+  hidden from counter/manager roles. Administrators can read the separate
+  archive (`/admin/chat`). Counter and archive views never expose customer
+  profile details or purchase history.
+- **Honest encryption scope**: chat message encryption covers `chat_messages`
+  bodies only. Metadata such as timestamps and conversation IDs is not
+  encrypted. **This does not encrypt existing orders, customer profiles,
+  delivery records, operational logs or other application PII.** Those existing
+  schemas use searchable plaintext and require a separate inventory, migration,
+  key-management and recovery plan before an application-wide encryption claim
+  can be made.
 
 ## Tests
 
-`npx tsx scripts/test-chat.ts` checks encryption, tamper detection, RLS,
-redaction, handoff boundaries and the mocked AI request. For an HTTP test only
-against a disposable local PGlite instance, start the dev server with a test
-key and run `python3 scripts/test-chat-http.py`. It creates and closes a chat
-and uses the seeded demo staff accounts. Never use that script against a live
-database. A production-like security review and live-provider integration test
-remain necessary.
+- `npx tsx scripts/test-chat.ts` checks encryption, tamper detection, key
+  rotation, RLS, redaction, handoff boundaries, staff-only vs AI-enabled
+  configuration detection, last-5-purchase recommendations, Dessert/Drink of
+  the Day rotation, cart-aware suggestions, privacy/isolation controls, and
+  mocked AI requests (verifying no PII is sent to OpenAI).
+- For end-to-end HTTP tests against a disposable local PGlite instance (never
+  against a live database), start the server with a test `CHAT_ENCRYPTION_KEY`
+  and run `python3 scripts/test-chat-http.py`. It verifies both staff-only mode
+  (empty OpenAI vars) and AI-enabled mode (mocked provider), customer sign-in
+  purchase-history isolation, IDOR rejection, cart pricing + checkout + payment
+  from chat-suggested items, and role/archive boundaries.

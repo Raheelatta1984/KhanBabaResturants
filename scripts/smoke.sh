@@ -25,7 +25,7 @@ check() {
 }
 
 echo "Public pages"
-for path in / /menu /menu/chicken-biryani /whats-new /checkout /table/T04 /order/KB-DEMO01 \
+for path in / /menu /menu/chicken-biryani /chat /api/chat/suggestions /whats-new /checkout /table/T04 /order/KB-DEMO01 \
             /order/KB-DEMO07 /track /login /login?mode=signup /t/demo-kb-demo01-token \
             /api/orders/KB-DEMO01 /api/orders/KB-DEMO07 /community \
             /community/demo-community-offer /community/demo-community-claimed \
@@ -737,18 +737,18 @@ contains "the text export opens with what produced it" "$TEXT" '# khanbaba opera
 contains "…names the build" "$TEXT" "build=$BUILD_LABEL"
 contains "…has key=value fields a search can match" "$TEXT" 'outcome=ok'
 contains "…and the course of action under each entry" "$TEXT" 'course_of_action:'
-CSV_HEAD=$(curl -s -b "$JAR" "$LOGS_API?view=actions&format=csv&limit=5" | head -1)
+CSV_HEAD=$(curl -s -b "$JAR" "$LOGS_API?view=actions&format=csv&limit=5" | awk 'NR==1{print}')
 contains "the CSV export has a header row" "$CSV_HEAD" 'occurred_at,level,reference,component,action,outcome'
 CSV_TYPE=$(curl -s -o /dev/null -D - -b "$JAR" "$LOGS_API?view=actions&format=csv&limit=5" | tr -d '\r' | grep -i '^content-disposition:')
 contains "…and downloads as a file" "$CSV_TYPE" 'attachment; filename="khanbaba-actions-'
-NDJSON_FIRST=$(curl -s -b "$JAR" "$LOGS_API?view=actions&format=ndjson&limit=5" | head -1)
+NDJSON_FIRST=$(curl -s -b "$JAR" "$LOGS_API?view=actions&format=ndjson&limit=5" | awk 'NR==1{print}')
 if printf '%s' "$NDJSON_FIRST" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{const o=JSON.parse(s);process.exit(o.ref&&o.course_of_action&&Array.isArray(o.course_of_action.steps)&&o.course_of_action.steps.length>0?0:1)})'; then
   echo "  ok   the NDJSON export is one object per line, course of action included"
 else
   echo "  FAIL NDJSON line: $NDJSON_FIRST"
   fail=1
 fi
-contains "findings export as CSV too" "$(curl -s -b "$JAR" "$LOGS_API?format=csv" | head -1)" 'last_seen_at,severity,reference,code'
+contains "findings export as CSV too" "$(curl -s -b "$JAR" "$LOGS_API?format=csv" | awk 'NR==1{print}')" 'last_seen_at,severity,reference,code'
 
 ACT_REF=$(printf '%s' "$ACTIONS" | grep -o '"reference":"ACT-[^"]*"' | head -1 | cut -d'"' -f4)
 ONE_ACTION=$(curl -s -b "$JAR" "$LOGS_API?ref=$ACT_REF&format=text")
