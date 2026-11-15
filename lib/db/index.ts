@@ -212,6 +212,17 @@ async function initialise(): Promise<Db> {
       const { seeded } = await seedDatabase(db);
       if (seeded)
         console.log("[khanbaba] Postgres schema created and demo data seeded");
+      // Ship release notes with the deploy that contains the change. Doing this
+      // on boot rather than by hand is the whole point: the feed went stale for
+      // three releases because publishing was a manual step nobody checked.
+      // Idempotent on pr_number, so a redeploy never duplicates or rewrites.
+      try {
+        const { publishReleaseNotes } = await import("../whats-new");
+        const noted = await publishReleaseNotes(db);
+        if (noted > 0) console.log(`[khanbaba] Published ${noted} release note(s)`);
+      } catch (error) {
+        console.error("[khanbaba] Release notes not published", error);
+      }
       return db;
     } catch (error) {
       lastError = error;

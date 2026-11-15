@@ -391,6 +391,24 @@ expect() { # expect <label> <want> <got>
   if [ "$2" = "$3" ]; then echo "  ok   $1"; else echo "  FAIL $1 (wanted $2, got $3)"; fail=1; fi
 }
 
+echo "What's new feed"
+WN=$(curl -s "$BASE/whats-new")
+for phrase in "Whalan 2770" "7-day content calendar" "which WhatsApp token works"; do
+  if printf '%s' "$WN" | grep -q "$phrase"; then
+    echo "  ok   what's new lists: $phrase"
+  else
+    echo "  FAIL what's new is missing: $phrase"
+    fail=1
+  fi
+done
+HOME_NEW=$(curl -s "$BASE/" | grep -oE "7-day content calendar|which WhatsApp token works" | head -2 | wc -l)
+if [ "$HOME_NEW" -ge 1 ]; then
+  echo "  ok   the homepage shows recent releases"
+else
+  echo "  FAIL the homepage shows no recent releases"
+  fail=1
+fi
+
 echo "Seven-day content calendar"
 CAL=$(curl -s -b "$JAR" "$BASE/api/ops/marketing/calendar")
 if printf '%s' "$CAL" | grep -q '"days"'; then

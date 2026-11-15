@@ -17,7 +17,9 @@
     "test:pg": "tsx scripts/test-pg.ts",
     "test:smoke": "bash scripts/smoke.sh",
     "test": "npm run typecheck && npm run test:pg && npm run test:smoke",
-    "marketing:calendar": "tsx scripts/marketing-calendar.ts"
+    "marketing:calendar": "tsx scripts/marketing-calendar.ts",
+    "whatsnew:check": "node scripts/check-whats-new.mjs --all",
+    "whatsnew:pr": "node scripts/check-whats-new.mjs --pr"
   },
   "dependencies": {
     "@fontsource-variable/fraunces": "^5.2.9",

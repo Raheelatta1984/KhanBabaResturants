@@ -1,0 +1,7 @@
+{
+  "title": "Answer which WhatsApp token works, and create the catalogue for you",
+  "summary": "A stale Vercel variable silently beat a good token saved in the portal: the portal showed a green tick, Meta answered error 190, and changing the token did nothing.",
+  "body": "Diagnostics now tests every token the app can see — the portal value and both Vercel aliases — and prints a verdict per token. Rotation became a toggle: WHATSAPP_ACCESS_TOKEN_NEW is a second alias, so trying a new token and falling back are one click each, with no deploy. Any single credential can be pinned to Vercel or the portal. The catalogue can be created from the portal instead of hunting a Content ID out of a Commerce Manager URL.",
+  "category": "feature",
+  "version": "3.4.0"
+}

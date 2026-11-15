@@ -1,0 +1,7 @@
+{
+  "title": "A 7-day content calendar that cannot go stale",
+  "summary": "Generated from the live menu and the delivery zones, so it cannot drift. Seven days, each with a different job.",
+  "body": "A calendar written once keeps saying 'across Sydney' for a year after the kitchen moves. This one reads the menu the kitchen is actually selling: every day carries a caption, hook, call to action, hashtags, posting time, channels and a genuinely different pairing. Regenerate with npm run marketing:calendar. Two bugs surfaced and fixed: the proven-token tick fingerprinted the resolved token rather than the one that won, so it could tick a token that did not work; and 'Create catalogue' required whatsapp_business_id, which had no input anywhere.",
+  "category": "feature",
+  "version": "3.5.0"
+}

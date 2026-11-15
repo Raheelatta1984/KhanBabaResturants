@@ -1,0 +1,7 @@
+{
+  "title": "The kitchen is in Whalan 2770, not the Sydney CBD",
+  "summary": "The stored address said Pitt Street. Delivery was quoted from a point 39 km from the kitchen, and postcodes 40 km away were treated as nearby.",
+  "body": "Every consequence of the wrong address was wrong. The kitchen is 1/53 Bulolo Dr, Whalan NSW 2770 — the delivery zones are redrawn around it, and an estimated pin is no longer trusted when pricing a delivery. Captions no longer promise delivery across Sydney.",
+  "category": "fix",
+  "version": "3.3.0"
+}
