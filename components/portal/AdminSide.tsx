@@ -9,6 +9,7 @@ const GROUPS: { title: string; links: { href: string; label: string }[] }[] = [
     links: [
       { href: "/admin/hub", label: "Command centre" },
       { href: "/admin", label: "Overview" },
+      { href: "/admin/logs", label: "Operational log" },
       { href: "/admin/orders", label: "Orders" },
       { href: "/counter", label: "Counter portal" },
       { href: "/counter/customers", label: "Customers" },
@@ -17,6 +18,17 @@ const GROUPS: { title: string; links: { href: string; label: string }[] }[] = [
       { href: "/delivery", label: "Delivery portal" },
       { href: "/admin/drivers", label: "Driver management" },
       { href: "/admin/community", label: "Returns & community" },
+    ],
+  },
+  {
+    // Marketing is its own group rather than buried in Catalogue. The page has
+    // always existed at /admin/marketing, but nothing linked to it, so the only
+    // way in was typing the URL — which is why the tab could not be found.
+    title: "Marketing",
+    links: [
+      { href: "/admin/marketing", label: "Marketing & social" },
+      { href: "/admin/marketing#integration-diagnostics", label: "Integration diagnostics" },
+      { href: "/admin/marketing#content-calendar", label: "Content calendar" },
     ],
   },
   {

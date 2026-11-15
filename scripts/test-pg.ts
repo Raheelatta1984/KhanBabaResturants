@@ -2579,6 +2579,119 @@ async function main() {
   }
   check("release versions never go backwards", monotonic, versions);
 
+  // -------------------------------------------------------------------------
+  // Operational log: a finding, its reference, and the action
+  // -------------------------------------------------------------------------
+  section("Operational log");
+
+  const { auditSystem, recordFindings, referenceFor, openLogs, setLogStatus, logSummary, runAudit } =
+    await import("../lib/ops/log");
+
+  // A reference must be stable and quotable: the same subject yields the same
+  // handle every time, or a reopened fault forks into duplicates.
+  const refA = referenceFor({ kind: "whatsapp", severity: "error", title: "Token rejected", action: "x", subject: "whatsapp:token" });
+  const refB = referenceFor({ kind: "whatsapp", severity: "warning", title: "A different wording", action: "y", subject: "whatsapp:token" });
+  check("the same subject yields the same reference", refA === refB, [refA, refB]);
+  check("a reference is readable and prefixed by kind", /^LOG-WA-/.test(refA), refA);
+  const refC = referenceFor({ kind: "menu", severity: "info", title: "Token rejected", action: "x", subject: "whatsapp:token" });
+  check("a different kind yields a different reference", refA !== refC, [refA, refC]);
+  check(
+    "the reference is short enough to say out loud",
+    refA.length <= 24,
+    refA,
+  );
+  check(
+    "the reference names the subject, not the table prefix",
+    /^LOG-WA-TOKEN-/.test(refA),
+    refA,
+  );
+
+  // Every finding the audit produces must carry a course of action. This is the
+  // whole point of the table: a log entry that only names a symptom moves the
+  // problem rather than solving it.
+  const findings = await auditSystem(db);
+  check("the audit finds something worth reporting", findings.length > 0, findings.length);
+  check(
+    "every finding has a course of action",
+    findings.every((finding) => finding.action.length > 30),
+    findings.filter((finding) => finding.action.length <= 30).map((f) => f.title),
+  );
+  check(
+    "every finding has a severity from the allowed set",
+    findings.every((finding) => ["info", "warning", "error", "critical"].includes(finding.severity)),
+  );
+  check(
+    "every finding has a title that names the problem",
+    findings.every((finding) => finding.title.length > 10),
+  );
+  check(
+    "findings are not duplicated within one audit",
+    new Set(findings.map((finding) => referenceFor(finding))).size === findings.length,
+  );
+
+  // The Whalan kitchen is the standing example: an address fault must be caught.
+  const addressFinding = findings.find((finding) => finding.subject?.startsWith("settings:address"));
+  check(
+    "the audit checks the kitchen address",
+    Boolean(addressFinding) || /Whalan/.test((await getSettings()).restaurant_address ?? ""),
+    (await getSettings()).restaurant_address,
+  );
+
+  // Recording is idempotent, or every boot would multiply the log.
+  const first = await recordFindings(db, findings);
+  check("the first recording writes rows", first.written === findings.length, first);
+  const second = await recordFindings(db, findings);
+  check("the second recording writes nothing new", second.written === 0, second);
+  check("the second recording bumps the existing rows", second.updated === findings.length, second);
+  const occurrences = await db.one<{ c: number }>(
+    "SELECT COUNT(*) AS c FROM operation_logs WHERE occurrences >= 2",
+  );
+  check("re-seeing a finding increments its occurrence count", Number(occurrences.c) > 0, occurrences.c);
+
+  const open = await openLogs(db);
+  check("open findings are readable", open.length > 0, open.length);
+  check(
+    "the worst severity sorts first",
+    open.every((row, index) => {
+      if (index === 0) return true;
+      const rank: Record<string, number> = { critical: 0, error: 1, warning: 2, info: 3 };
+      return rank[open[index - 1].severity] <= rank[row.severity];
+    }),
+  );
+  check("every stored row keeps its action", open.every((row) => row.action.length > 30));
+
+  // Closing requires a reason, and a closed row must stay closed.
+  const target = open[0];
+  const closed = await setLogStatus(db, target.id, "resolved", "test-harness", "verified in the harness");
+  check("a finding can be resolved", closed === true);
+  const afterClose = await openLogs(db);
+  check("a resolved finding leaves the open list", !afterClose.some((row) => row.id === target.id));
+
+  const closedAgain = await recordFindings(db, findings.filter((f) => referenceFor(f) === target.reference));
+  check("a resolved finding is not silently reopened", closedAgain.skipped === 1, closedAgain);
+  check(
+    "a resolved finding keeps its resolution note",
+    (await db.one<{ note: string }>("SELECT resolution_note AS note FROM operation_logs WHERE id = $1", [target.id])).note ===
+      "verified in the harness",
+  );
+
+  const reopened = await setLogStatus(db, target.id, "open", "test-harness", "came back");
+  check("a finding can be reopened deliberately", reopened === true);
+  check(
+    "reopening clears the resolution timestamp",
+    (await db.one<{ t: string | null }>("SELECT resolved_at::text AS t FROM operation_logs WHERE id = $1", [target.id])).t === null,
+  );
+
+  check("a missing log id is refused", (await setLogStatus(db, 999999, "resolved", "t", "n")) === false);
+
+  const logStats = await logSummary(db);
+  check("the summary counts open findings", logStats.open > 0, logStats.open);
+  check("the summary groups by kind", logStats.byKind.length > 0, logStats.byKind);
+
+  // The convenience wrapper must agree with its parts.
+  const ran = await runAudit(db);
+  check("runAudit reports the findings it saw", ran.findings.length === findings.length, ran.findings.length);
+
   await harness.close();
 
   console.log(`\n${passed} checks passed, ${failures.length} failed`);

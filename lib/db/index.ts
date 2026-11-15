@@ -223,6 +223,11 @@ async function initialise(): Promise<Db> {
       } catch (error) {
         console.error("[khanbaba] Release notes not published", error);
       }
+      // NOTE: do not audit here. `auditSystem` calls getSettings(), which calls
+      // getDb() — and getDb() is this very function, still awaiting this promise.
+      // That is a deadlock: the first request would hang forever and the app
+      // would never boot. The audit runs from the log page and the API route
+      // instead, which is also better: it is fresh every time somebody looks.
       return db;
     } catch (error) {
       lastError = error;

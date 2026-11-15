@@ -539,6 +539,78 @@ expect "admin signs in with the new password" 200 "$(post -c /dev/null /api/staf
 check "/kitchen" -b "$COOKJAR"
 rm -f "$COOKJAR" "$OLDCOOK"
 
+echo "Operational log"
+# The go-live step above rotated the admin password, so the jar from earlier in
+# this script is stale and every request would redirect to the sign-in page.
+# Re-authenticate with the post-go-live password before touching the log.
+RELOGIN=$(curl -s -c "$JAR" -o /dev/null -w "%{http_code}" -X POST "$BASE/api/staff/login" \
+  -H 'content-type: application/json' \
+  -d '{"email":"admin@khanbaba.com.au","password":"smoke-owner-pass-1"}')
+if [ "$RELOGIN" = "200" ]; then
+  echo "  ok   re-signed in after the password rotation"
+else
+  echo "  FAIL could not re-sign in after go-live (got $RELOGIN)"
+  fail=1
+fi
+AUDIT=$(curl -s -b "$JAR" -X POST "$BASE/api/ops/logs" -H 'content-type: application/json' -d '{"action":"audit"}')
+if printf '%s' "$AUDIT" | grep -q '"ok":true'; then
+  echo "  ok   the audit runs against the live system"
+else
+  echo "  FAIL audit: $AUDIT"
+  fail=1
+fi
+LOGS=$(curl -s -b "$JAR" "$BASE/api/ops/logs")
+if printf '%s' "$LOGS" | grep -q '"reference"'; then
+  echo "  ok   findings carry a quotable reference"
+else
+  echo "  FAIL no references in the log"
+  fail=1
+fi
+if printf '%s' "$LOGS" | grep -q '"action"'; then
+  echo "  ok   every finding carries a course of action"
+else
+  echo "  FAIL findings have no course of action"
+  fail=1
+fi
+LOG_PAGE_CODE=$(curl -s -o /tmp/logs-page.html -w "%{http_code}" -b "$JAR" "$BASE/admin/logs")
+if grep -q "Operational log" /tmp/logs-page.html; then
+  echo "  ok   the operational log page renders"
+else
+  echo "  FAIL /admin/logs did not render (status $LOG_PAGE_CODE)"
+  head -c 300 /tmp/logs-page.html
+  fail=1
+fi
+# Closing without a note must be refused: a row closed to clear the screen is
+# indistinguishable from one fixed.
+LOG_ID=$(printf '%s' "$LOGS" | sed -n 's/.*"id":\([0-9]*\).*/\1/p' | head -1)
+if [ -n "$LOG_ID" ]; then
+  NO_NOTE=$(curl -s -o /dev/null -w "%{http_code}" -b "$JAR" -X POST "$BASE/api/ops/logs" \
+    -H 'content-type: application/json' -d "{\"action\":\"set-status\",\"id\":$LOG_ID,\"status\":\"resolved\"}")
+  if [ "$NO_NOTE" = "400" ]; then
+    echo "  ok   closing a finding without a note is refused"
+  else
+    echo "  FAIL closing without a note returned $NO_NOTE, expected 400"
+    fail=1
+  fi
+  WITH=$(curl -s -o /dev/null -w "%{http_code}" -b "$JAR" -X POST "$BASE/api/ops/logs" \
+    -H 'content-type: application/json' -d "{\"action\":\"set-status\",\"id\":$LOG_ID,\"status\":\"acknowledged\",\"note\":\"seen\"}")
+  if [ "$WITH" = "200" ]; then
+    echo "  ok   a finding can be acknowledged"
+  else
+    echo "  FAIL acknowledging returned $WITH"
+    fail=1
+  fi
+  curl -s -b "$JAR" -X POST "$BASE/api/ops/logs" -H 'content-type: application/json' \
+    -d "{\"action\":\"set-status\",\"id\":$LOG_ID,\"status\":\"open\",\"note\":\"reopened by smoke\"}" -o /dev/null
+fi
+if curl -s -o /dev/null -w "%{http_code}" "$BASE/api/ops/logs" | grep -q '^401$'; then
+  echo "  ok   the log is staff-only"
+else
+  echo "  FAIL the log is readable without signing in"
+  fail=1
+fi
+
+
 rm -f "$JAR"
 if [ "$fail" = "1" ]; then
   echo "Smoke test failed"

@@ -127,3 +127,15 @@ npm run marketing:calendar
 
 The file header says it is generated, because a hand-edited copy gets silently
 overwritten the next time the command runs.
+
+## Marketing and the operational log
+
+| I want to… | Click |
+|---|---|
+| Change how the restaurant talks on Instagram | **Marketing → Marketing & social** (`/admin/marketing`) |
+| Find out which WhatsApp token actually works | **Marketing → Integration diagnostics** |
+| See the next 7 days of posts | **Marketing → Content calendar** |
+| Know what is wrong and what to do about it | **Operational log** (`/admin/logs`) |
+
+The Marketing console had no sidebar link until v3.6.0 — the page existed at
+`/admin/marketing` but the only way in was typing the URL. That is fixed.
