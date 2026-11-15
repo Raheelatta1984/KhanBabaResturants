@@ -5,6 +5,8 @@ import { seedDatabase } from "../lib/db/seed";
 import { chatKey, encryptMessage, decryptMessage } from "../lib/chat/crypto";
 import { addMessage, readMessages, minimiseForAI } from "../lib/chat/service";
 import { askAssistant } from "../lib/chat/assistant";
+import { authorisedCron, pruneExpiredChats } from "../lib/chat/retention";
+import { allowChatRequest, clientHash } from "../lib/chat/rate-limit";
 import { redact } from "../lib/ops/actions";
 
 async function main() {
@@ -18,6 +20,14 @@ async function main() {
   assert.throws(() => decryptMessage(cipher, "conversation", "staff"));
   const parts = cipher.split("."); const tag = Buffer.from(parts[2], "base64"); tag[0] ^= 1; parts[2] = tag.toString("base64");
   assert.throws(() => decryptMessage(parts.join("."), "conversation", "customer"));
+  process.env.CHAT_ENCRYPTION_KEY = "02".repeat(32);
+  process.env.CHAT_OLD_ENCRYPTION_KEYS = "01".repeat(32);
+  assert.equal(decryptMessage(cipher, "conversation", "customer"), "Private message");
+  delete process.env.CHAT_OLD_ENCRYPTION_KEYS;
+  assert.throws(() => decryptMessage(cipher, "conversation", "customer"));
+  assert(!authorisedCron("Bearer short", "short"));
+  assert(!authorisedCron("Bearer wrong", "x".repeat(32)));
+  assert(authorisedCron(`Bearer ${"x".repeat(32)}`, "x".repeat(32)));
   assert.equal(minimiseForAI("Email me at a@example.com or call 0412 345 678"), "Email me at [email removed] or call [number removed]");
   assert.deepEqual(redact({ action: "reply", text: "private details", id: "abc" }, "", 0, "chat"), { action: "reply", text: "[withheld]", id: "[withheld]" });
   const { db, close } = await createHarness();
@@ -28,6 +38,20 @@ async function main() {
   assert(!before.ciphertext.includes("private before handoff"));
   await addMessage(db, "chat1", "customer", "after handoff");
   assert.deepEqual((await readMessages(db, "chat1", before.id)).map((m) => m.text), ["after handoff"]);
+  await db.run("INSERT INTO chat_conversations (id, token_hash, updated_at) VALUES ($1,$2,now() - interval '8 days')", ["expired", "expired-hash"]);
+  await addMessage(db, "expired", "customer", "old message");
+  await db.run("UPDATE chat_conversations SET updated_at=now() - interval '8 days' WHERE id='expired'");
+  assert.equal(await pruneExpiredChats(db), 1);
+  assert.equal((await db.one<{ count: number }>("SELECT COUNT(*) AS count FROM chat_messages WHERE conversation_id='expired'")).count, 0);
+  assert.equal((await readMessages(db, "chat1")).length, 2);
+  const hash = clientHash(new Headers()); assert(hash && hash !== "local");
+  process.env.VERCEL = "1";
+  assert.equal(clientHash(new Headers()), null);
+  assert(clientHash(new Headers({ "x-vercel-forwarded-for": "203.0.113.4" })));
+  assert.equal(clientHash(new Headers({ "x-vercel-forwarded-for": "spoofed" })), null);
+  delete process.env.VERCEL;
+  for (let i = 0; i < 30; i++) assert(await allowChatRequest(db, hash));
+  assert.equal(await allowChatRequest(db, hash), false);
   const rls = await db.query<{ relname: string; relrowsecurity: boolean }>("SELECT relname, relrowsecurity FROM pg_class WHERE relname IN ('chat_conversations','chat_messages','chat_ai_quota')");
   assert.equal(rls.length, 3); assert(rls.every((r) => r.relrowsecurity));
   const oldFetch = globalThis.fetch;

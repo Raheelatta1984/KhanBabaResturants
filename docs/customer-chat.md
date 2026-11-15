@@ -11,8 +11,9 @@ that its suggestions are correct. Guests can call if chat is unavailable.
    `CHAT_ENCRYPTION_KEY` environment variable. Keep a secure, independent backup.
    Missing or invalid keys disable chat. All message bodies use AES-256-GCM with
    random nonces and conversation/sender authenticated data. This is server-side
-   encryption at rest, **not end-to-end encryption**. A key change makes old
-   messages unreadable; key rotation/migration is not yet implemented.
+   encryption at rest, **not end-to-end encryption**. During rotation, place
+   previous keys in `CHAT_OLD_ENCRYPTION_KEYS` (comma-separated, at most five),
+   and retain them until old records and backups expire. Back up all keys safely.
 2. To enable AI, configure `OPENAI_API_KEY` and `OPENAI_CHAT_MODEL` in the host's
    secret store and redeploy. Without them, the customer can still request a
    counter person. AI sends recent messages and the published available menu to
@@ -25,14 +26,17 @@ that its suggestions are correct. Guests can call if chat is unavailable.
    application database role must be able to use them. Verify permissions on the
    deployed database, including any privileged service roles and backups.
 4. Add edge/WAF rate limiting and monitoring for `/api/chat` before exposing the
-   service publicly. A database-backed shared ceiling of 60 AI calls per hour
-   limits provider spend, but is **not** a comprehensive abuse/DoS defence.
+   service publicly. A database-backed limit allows 30 chat POSTs per minute
+   per Vercel-supplied IP (stored as a keyed hash); a shared ceiling of 60 AI
+   calls per hour limits provider spend. These are not comprehensive DDoS defence.
    Sessions are bearer cookies, expire after seven days and do not follow guests
    between devices. There is no automatic notification to counter staff; the
    queue must be monitored. The UI polls every five seconds.
-5. Agree a retention and deletion policy and implement scheduled deletion and
-   key rotation before relying on the archive. The current code retains chats
-   indefinitely. Backups and provider retention need their own policies.
+5. Set a random `CRON_SECRET` of at least 32 characters in Vercel. The daily
+   Vercel cron removes chats after seven days of inactivity in batches of up
+   to 10,000, and removes old rate and quota counters. Failed or missed runs,
+   large backlogs, database backups and provider retention can extend storage;
+   monitor the cron and apply a separate backup/provider retention policy.
 
 Customers see their own transcript; counter/manager staff can read only active
 handoffs and only messages sent after the handoff. Administrators can read the

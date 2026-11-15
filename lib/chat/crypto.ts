@@ -17,8 +17,15 @@ export function encryptMessage(text: string, conversation: string, sender: strin
 export function decryptMessage(value: string, conversation: string, sender: string): string {
   const [version, iv, tag, body, extra] = value.split(".");
   if (version !== "v1" || !iv || !tag || !body || extra !== undefined) throw new Error("Invalid encrypted message");
-  const cipher = createDecipheriv("aes-256-gcm", chatKey(), Buffer.from(iv, "base64"));
-  cipher.setAAD(Buffer.from(`${conversation}:${sender}`));
-  cipher.setAuthTag(Buffer.from(tag, "base64"));
-  return Buffer.concat([cipher.update(Buffer.from(body, "base64")), cipher.final()]).toString("utf8");
+  const old = (process.env.CHAT_OLD_ENCRYPTION_KEYS ?? "").split(",").map((key) => key.trim()).filter(Boolean);
+  if (old.length > 5 || old.some((key) => !/^[a-fA-F0-9]{64}$/.test(key))) throw new Error("Invalid previous chat key configuration");
+  for (const key of [chatKey(), ...old.map((key) => Buffer.from(key, "hex"))]) {
+    try {
+      const cipher = createDecipheriv("aes-256-gcm", key, Buffer.from(iv, "base64"));
+      cipher.setAAD(Buffer.from(`${conversation}:${sender}`));
+      cipher.setAuthTag(Buffer.from(tag, "base64"));
+      return Buffer.concat([cipher.update(Buffer.from(body, "base64")), cipher.final()]).toString("utf8");
+    } catch { /* try an earlier key */ }
+  }
+  throw new Error("Could not authenticate encrypted message");
 }

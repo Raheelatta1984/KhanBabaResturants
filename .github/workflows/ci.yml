@@ -40,6 +40,8 @@ jobs:
       # channel, kitchen/delivery hand-offs and production cost postings.
       - name: Postgres data-layer tests (PGlite)
         run: npm run test:pg
+      - name: Chat security and retention tests
+        run: npx tsx scripts/test-chat.ts
       - name: Build
         run: npm run build
       # The production server boots against in-process PGlite too, so the smoke

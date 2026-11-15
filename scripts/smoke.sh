@@ -472,7 +472,7 @@ else
   echo "  FAIL the first release listed is: $FIRST_NOTE"
   fail=1
 fi
-HOME_NEW=$(curl -s "$BASE/" | grep -oE "Changes now reach the screen|A log that tells you what to do" | head -2 | wc -l)
+HOME_NEW=$(curl -s "$BASE/" | grep -oE "Customer chat and counter handoff|Cultural themes and a new menu guide|Changes now reach the screen" | head -2 | wc -l)
 if [ "$HOME_NEW" -ge 1 ]; then
   echo "  ok   the homepage shows recent releases"
 else

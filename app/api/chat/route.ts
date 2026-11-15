@@ -5,6 +5,7 @@ import { getDb } from "@/lib/db";
 import { chatKey, tokenHash } from "@/lib/chat/crypto";
 import { addMessage, readMessages, type Conversation } from "@/lib/chat/service";
 import { askAssistant } from "@/lib/chat/assistant";
+import { allowChatRequest, clientHash } from "@/lib/chat/rate-limit";
 
 export const dynamic = "force-dynamic";
 const COOKIE = "kb_chat";
@@ -31,8 +32,12 @@ export async function POST(request: Request) {
   let body: { action?: unknown; text?: unknown; consent?: unknown };
   try { body = await request.json(); } catch { return reply({ error: "Invalid request" }, 400); }
   try {
-    chatKey(); const db = await getDb(); let chat = await current(db);
+    chatKey(); const db = await getDb();
+    const hash = clientHash(request.headers);
+    if (!hash || !(await allowChatRequest(db, hash))) return reply({ error: "Too many requests, or client identity unavailable. Please try later or call us." }, 429);
+    let chat = await current(db);
     if (body.action === "start") {
+      if (process.env.NODE_ENV === "production" && (process.env.CRON_SECRET?.length ?? 0) < 32) return reply({ error: "Chat retention is not configured. Please call the restaurant." }, 503);
       if (body.consent !== true) return reply({ error: "Consent is required" }, 400);
       if (chat && chat.status !== "closed") return reply({ ok: true });
       const token = randomBytes(32).toString("hex"); const id = randomUUID();

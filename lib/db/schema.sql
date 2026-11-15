@@ -1161,3 +1161,12 @@ CREATE TABLE IF NOT EXISTS chat_ai_quota (
 );
 ALTER TABLE chat_ai_quota ENABLE ROW LEVEL SECURITY;
 ALTER TABLE chat_conversations ADD COLUMN IF NOT EXISTS handoff_after_message_id INTEGER;
+CREATE INDEX IF NOT EXISTS chat_conversations_updated_at ON chat_conversations(updated_at);
+CREATE TABLE IF NOT EXISTS chat_rate_limits (
+  client_hash TEXT NOT NULL,
+  minute_bucket TIMESTAMPTZ NOT NULL,
+  requests INTEGER NOT NULL,
+  PRIMARY KEY (client_hash, minute_bucket)
+);
+CREATE INDEX IF NOT EXISTS chat_rate_limits_bucket ON chat_rate_limits(minute_bucket);
+ALTER TABLE chat_rate_limits ENABLE ROW LEVEL SECURITY;
