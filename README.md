@@ -630,7 +630,8 @@ HTTPS and point the enabled webhooks (`/api/webhooks/uber`, `/api/webhooks/doord
   release note that shipped in the build and is not on the What's New page.
 - Open **Logs** in the staff bar (`/admin/logs`): findings are what is wrong now, the action log is what was done, and
   every entry carries a course of action. A finding `SEC_DEMO_PASSWORD` means a live login still uses the demo password
-  printed above — run **Go live**. See `docs/operational-log.md` and `docs/where-to-click.md`.
+  printed above — press **Remove demo credentials** in Users & access. See `docs/operational-log.md` and
+  `docs/where-to-click.md`.
 
 ## Roadmap
 

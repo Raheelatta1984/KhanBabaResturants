@@ -37,7 +37,8 @@ You will get a table like this:
 **Sign in with your own staff login.** The demo logins that ship with the seed data share one password, and that
 password is printed in this repository's README, so it must not be in use on the live site. If it still is, the
 Operational log (`/admin/logs`) shows a critical finding, `SEC_DEMO_PASSWORD`, naming the accounts. To retire them all
-in one step: **Admin → Users & access → Go live**.
+in one step: **Admin → Users & access → Remove demo credentials**. That step also switches off every other login still
+on the demo password, so do it at a quiet moment, then reset each of those passwords and enable the accounts again.
 
 The same screen has the other two switches:
 `Auto` / `Use Vercel env` / `Use admin portal`, and the two token-variable buttons.
