@@ -1,0 +1,7 @@
+{
+  "title": "Counter chat without OpenAI, personalised suggestions and daily specials",
+  "summary": "Chat directly with counter staff even when OpenAI is not configured, see menu and cart suggestions from your last five orders plus today's dessert and drink of the day, and add dishes straight to your cart.",
+  "body": "Customers can now start a counter-staff chat immediately when OpenAI variables are empty; once OpenAI variables are configured, AI menu chat becomes available automatically alongside counter handoff. Signed-in guests receive menu and cart suggestions drawn strictly from their own last five non-cancelled orders, together with a daily Dessert of the Day and Drink of the Day, and can add suggested dishes straight to the existing cart, checkout and payment flow. Chat message encryption covers chat messages at rest only and does not extend to orders, customer profiles or other application records.",
+  "category": "feature",
+  "version": "3.8.0"
+}
