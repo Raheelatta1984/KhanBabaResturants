@@ -42,6 +42,13 @@ export type TodayMenu = {
   restaurantName: string;
   currency: string;
   baseUrl: string;
+  /**
+   * Where we actually deliver, for captions and blog copy. Hard-coding "across
+   * Sydney" was wrong the moment the kitchen moved to Whalan: every caption and
+   * blog post claimed a delivery area 40 km from where the food is cooked.
+   * Derived from the zone list so it cannot drift from the delivery rules.
+   */
+  deliveryArea: string;
 };
 
 const WEEKDAYS = [
@@ -95,6 +102,13 @@ export async function todayMenu(db: Db, baseUrl: string): Promise<TodayMenu> {
       ORDER BY MIN(mi.sort_order), mi.id LIMIT 3`,
   );
 
+  // Read the delivery area from the same zone rows that price delivery, so a
+  // caption can never promise further than the kitchen actually drives.
+  const zones = await db.query<{ name: string; suburbs: string | null }>(
+    "SELECT name, suburbs FROM delivery_zones WHERE active ORDER BY sort_order LIMIT 4",
+  );
+  const deliveryArea = describeDeliveryArea(suburbsFromZones(zones));
+
   const now = new Date();
   return {
     date: now.toISOString().slice(0, 10),
@@ -106,7 +120,38 @@ export async function todayMenu(db: Db, baseUrl: string): Promise<TodayMenu> {
     restaurantName: settingValue(settings, "restaurant_name", "Khan Baba Restaurant"),
     currency: settingValue(settings, "whatsapp_currency", "AUD"),
     baseUrl,
+    deliveryArea,
   };
+}
+
+/**
+ * Turn the zone list into the phrase a caption can use.
+ *
+ * "across Western Sydney" reads better than "to Whalan, Mount Druitt, Blacktown,
+ * St Marys, Penrith and Parramatta", and it is honest as long as it comes from
+ * the zones rather than a hard-coded string. With no zones configured it says
+ * "in our delivery area" rather than inventing a radius.
+ */
+function suburbsFromZones(zones: { name: string; suburbs: string | null }[]): string[] {
+  const names: string[] = [];
+  for (const zone of zones) {
+    for (const suburb of (zone.suburbs ?? "").split(",")) {
+      const trimmed = suburb.trim();
+      if (trimmed && !names.includes(trimmed)) names.push(trimmed);
+    }
+  }
+  return names;
+}
+
+export function describeDeliveryArea(suburbs: string[]): string {
+  if (suburbs.length === 0) return "in our delivery area";
+  // The zones cover Sydney's west; say so when the suburbs are all out that way,
+  // otherwise just name the first few so we never over-promise a region.
+  const west = ["Whalan", "Mount Druitt", "Blacktown", "St Marys", "Penrith", "Parramatta", "Doonside", "Rooty Hill"];
+  const allWest = suburbs.some((suburb) => west.some((w) => suburb.toLowerCase().includes(w.toLowerCase())));
+  if (allWest) return "across Western Sydney";
+  const head = suburbs.slice(0, 3).join(", ");
+  return `to ${head} and nearby suburbs`;
 }
 
 /** A readable WhatsApp broadcast, inside WhatsApp's 4096-character limit. */
@@ -166,7 +211,7 @@ export function menuCaption(menu: TodayMenu): string {
     "Fresh out of the kitchen — biryani, karahi, naan straight from the tandoor.",
     "",
     `Order: ${menu.baseUrl}/menu`,
-    "Delivery across Sydney, or collect at the counter.",
+    `Delivery ${menu.deliveryArea}, or collect at the counter.`,
   ].join("\n");
 }
 
@@ -216,7 +261,7 @@ export function menuBlog(menu: TodayMenu): {
   return {
     slug,
     title: `${menu.weekday}'s menu at ${menu.restaurantName} — ${menu.date}`,
-    excerpt: `${menu.totalDishes} dishes on the pass today, cooked to order. Order on WhatsApp or online for delivery across Sydney.`,
+    excerpt: `${menu.totalDishes} dishes on the pass today, cooked to order. Order on WhatsApp or online for delivery ${menu.deliveryArea}.`,
     body: [
       `# ${menu.restaurantName} — ${menu.weekday}`,
       "",
@@ -230,7 +275,7 @@ export function menuBlog(menu: TodayMenu): {
       "## How to order",
       "",
       `- WhatsApp: reply to the business number with your order, or tap ${menu.baseUrl}/menu`,
-      `- Delivery across Sydney, collection at the counter`,
+      `- Delivery ${menu.deliveryArea}, collection at the counter`,
     ].join("\n"),
   };
 }

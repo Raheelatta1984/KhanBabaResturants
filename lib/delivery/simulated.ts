@@ -22,7 +22,10 @@ function restaurantAddress(settings: Record<string, string>): string {
   return settingValue(
     settings,
     "restaurant_address",
-    "Shop 4, 379 Pitt Street, Sydney NSW 2000",
+    // The Whalan kitchen, not a Sydney CBD shopfront. A courier that picks up
+    // from the wrong side of the city is worse than one that refuses; this
+    // fallback only applies before the seed writes the real address.
+    "1/53 Bulolo Dr, Whalan NSW 2770",
   );
 }
 

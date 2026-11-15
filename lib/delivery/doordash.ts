@@ -218,12 +218,12 @@ export class DoorDashDriveProvider implements DeliveryProvider {
       pickup_address: settingValue(
         settings,
         "restaurant_address",
-        "Shop 4, 379 Pitt Street, Sydney NSW 2000",
+        "1/53 Bulolo Dr, Whalan NSW 2770",
       ),
       pickup_phone_number: settingValue(
         settings,
         "restaurant_phone",
-        "0290001234",
+        "0461 382 923",
       ).replace(/\s/g, ""),
       pickup_instructions: settingValue(settings, "uber_pickup_notes"),
       dropoff_business_name: "",

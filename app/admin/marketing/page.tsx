@@ -257,15 +257,12 @@ export default async function MarketingPage() {
               title: "WhatsApp Broadcast",
               description: "Temporary WhatsApp Business account mapping (+61410913853 is the main account, this section manages the temporary broadcast account)",
               fields: [
-                { key: "whatsapp_phone_number_id", label: "WhatsApp Phone Number ID (Temporary)", type: "text" },
-                { key: "whatsapp_access_token", label: "WhatsApp Access Token (Temporary)", type: "password" },
-                { key: "whatsapp_business_account_id", label: "WhatsApp Business Account ID (Temporary)", type: "text" },
-                { key: "whatsapp_catalog_id", label: "WhatsApp Catalog ID (Temporary)", type: "text" },
-                { key: "whatsapp_verify_token", label: "WhatsApp Verify Token (Temporary)", type: "text" },
-                { key: "whatsapp_app_secret", label: "WhatsApp App Secret (Temporary)", type: "password" },
-                { key: "whatsapp_counter_number", label: "WhatsApp Counter Number (Temporary)", type: "text" },
-                { key: "whatsapp_display_number", label: "WhatsApp Display Number (Temporary)", type: "text" },
-                { key: "whatsapp_enabled", label: "Enable Temporary WhatsApp Broadcast", type: "toggle" },
+                // Credentials, catalogue id and phone numbers are NOT repeated
+                // here. They live in Admin → WhatsApp Business, which posts
+                // through the same settings table — two forms writing the same
+                // keys is how a value gets silently reverted by whichever page
+                // was saved last. This form keeps only the broadcast switch.
+                { key: "whatsapp_enabled", label: "Enable WhatsApp broadcast", type: "toggle" },
               ],
             },
           ]}

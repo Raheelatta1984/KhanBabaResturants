@@ -2362,6 +2362,25 @@ async function main() {
     await setSetting("whatsapp_verified_token", "primary:1111", db);
     const stale = await whatsappConfig();
     check("proof for a different token is not mistaken for this one", stale.tokenVerified === false);
+
+    // The regression this guards: the probe used to fingerprint the *resolved*
+    // token, so when the winner came from Vercel it recorded proof against a
+    // different token — showing a green tick on a token that did not work.
+    process.env.WHATSAPP_ACCESS_TOKEN = "VERCEL-TOKEN-3333";
+    process.env.WHATSAPP_ACCESS_TOKEN_NEW = "NEWVERCEL-TOKEN-2222";
+    await setSetting("whatsapp_env_alias", "new", db);
+    await setSetting("whatsapp_credential_mode", "auto", db);
+    // Proof recorded against the alias the winner came from must match.
+    await setSetting("whatsapp_verified_token", tokenFingerprint("new", "NEWVERCEL-TOKEN-2222"), db);
+    check(
+      "proof recorded for the spare alias matches the token in use",
+      (await whatsappConfig()).tokenVerified === true,
+    );
+    check(
+      "the same last four on the other alias is not accepted as proof",
+      tokenFingerprint("primary", "NEWVERCEL-TOKEN-2222") !==
+        tokenFingerprint("new", "NEWVERCEL-TOKEN-2222"),
+    );
     check("the stale proof is still shown so the UI can explain it", stale.verifiedToken === "primary:1111");
 
     // Per-field override: read the catalogue id from Vercel, the token from the portal.
@@ -2396,6 +2415,99 @@ async function main() {
     deleteSetting("whatsapp_phone_number_id", db).catch(() => {});
     deleteSetting("whatsapp_access_token", db).catch(() => {});
   }
+
+  // -------------------------------------------------------------------------
+  // Seven-day content calendar
+  // -------------------------------------------------------------------------
+  section("Seven-day content calendar");
+
+  const { buildCalendar, calendarMarkdown } = await import("../lib/marketing/calendar");
+  const { describeDeliveryArea } = await import("../lib/marketing/engine");
+
+  const calMenu = await todayMenu(db, "https://khanbabaresturants.vercel.app");
+  const calStart = new Date("2026-11-16T00:00:00Z"); // a Monday
+  const cal = buildCalendar(calMenu, { start: calStart });
+
+  check("the calendar has seven days", cal.days.length === 7, cal.days.length);
+  check(
+    "it starts on Monday and ends on Sunday",
+    cal.days[0].weekday === "Monday" && cal.days[6].weekday === "Sunday",
+    [cal.days[0].weekday, cal.days[6].weekday],
+  );
+  check(
+    "consecutive days are consecutive dates",
+    cal.days.every((day, index) =>
+      index === 0
+        ? true
+        : (new Date(`${day.date}T00:00:00Z`).getTime() -
+            new Date(`${cal.days[index - 1].date}T00:00:00Z`).getTime()) === 86_400_000,
+    ),
+  );
+  check("every day has a theme", cal.days.every((day) => day.theme.length > 3));
+  check("every day has a caption", cal.days.every((day) => day.caption.length > 40));
+  check("every day has a call to action", cal.days.every((day) => day.cta.length > 3));
+  check("every day has a posting time", cal.days.every((day) => /^\d{2}:\d{2}$/.test(day.bestTime)));
+  check("every day has at least one channel", cal.days.every((day) => day.channels.length > 0));
+  check("every day has hashtags", cal.days.every((day) => day.hashtags.length > 0));
+  check(
+    "hashtags are capped at fifteen for every day",
+    cal.days.every((day) => day.hashtags.length <= 15),
+  );
+  check(
+    "every caption carries the menu link",
+    cal.days.every((day) => day.caption.includes("/menu")),
+  );
+  check(
+    "no caption promises delivery across Sydney",
+    cal.days.every((day) => !/across Sydney/i.test(day.caption)),
+    cal.days.map((day) => day.caption).filter((c) => /across Sydney/i.test(c)),
+  );
+
+  // Determinism matters: an unstable generator churns the file on every run.
+  const calAgain = buildCalendar(calMenu, { start: calStart });
+  check("the calendar is deterministic for a given date", calendarMarkdown(cal, {}) === calendarMarkdown(calAgain, {}));
+
+  // The delivery area must come from the zones, not a hard-coded string.
+  check(
+    "the delivery area is derived from the real zones",
+    cal.deliveryArea === "across Western Sydney" || /^to .+ and nearby suburbs$/.test(cal.deliveryArea),
+    cal.deliveryArea,
+  );
+  check("no zones falls back to a phrase, not a false promise", describeDeliveryArea([]) === "in our delivery area");
+  check(
+    "western suburbs are described as Western Sydney",
+    describeDeliveryArea(["Whalan", "Mount Druitt"]) === "across Western Sydney",
+  );
+  check(
+    "unfamiliar suburbs are named instead of guessed",
+    describeDeliveryArea(["Byron Bay"]).includes("Byron Bay"),
+  );
+
+  // The Markdown is the deliverable, so it has to be usable on its own.
+  const md = calendarMarkdown(cal, { restaurant_address: "1/53 Bulolo Dr, Whalan NSW 2770" });
+  check("the markdown names the kitchen address", md.includes("1/53 Bulolo Dr, Whalan NSW 2770"));
+  check("the markdown has a row per day", (md.match(/^## (Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday) /gm) ?? []).length === 7);
+  check("the markdown carries each caption", cal.days.every((day) => md.includes(day.caption.split("\n")[0])));
+  check("the markdown warns that it is generated", /generated/i.test(md));
+  check("the markdown does not promise results", !/guarantee/i.test(md) || /does not promise results/i.test(md));
+  check("the markdown has no unrendered template holes", !md.includes("undefined") && !md.includes("[object Object]"));
+
+  // -------------------------------------------------------------------------
+  // Courier addresses must not be the old CBD shopfront
+  // -------------------------------------------------------------------------
+  section("Courier pickup address");
+
+  const courierSettings = await getSettings();
+  check(
+    "the kitchen address is the Whalan shop",
+    /Whalan NSW 2770/.test(courierSettings.restaurant_address ?? ""),
+    courierSettings.restaurant_address,
+  );
+  check(
+    "the stored address is not the old CBD shopfront",
+    !/Pitt Street|Sydney NSW 2000/.test(courierSettings.restaurant_address ?? ""),
+    courierSettings.restaurant_address,
+  );
 
   await harness.close();
 
