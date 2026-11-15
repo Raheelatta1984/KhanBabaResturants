@@ -75,5 +75,15 @@ export const RELEASE_NOTES: BundledReleaseNote[] = [
       "category": "feature",
       "version": "3.7.1"
     }
+  },
+  {
+    "prNumber": 28,
+    "note": {
+      "title": "Customer chat and counter handoff",
+      "summary": "Ask an optional AI menu assistant for ideas or request a counter team member. Chat messages are encrypted at rest.",
+      "body": "Guests can ask about menu preferences or request a counter team member. Staff can see the active handoff; administrators can review the conversation archive. The AI requires provider configuration and does not place orders or guarantee allergen safety. Orders continue through the existing menu and checkout. Chat message encryption does not extend to existing customer or order records.",
+      "category": "feature",
+      "version": "3.7.2"
+    }
   }
 ];
