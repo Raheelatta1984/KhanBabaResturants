@@ -1117,9 +1117,11 @@ CREATE INDEX IF NOT EXISTS idx_action_logs_outcome ON action_logs(outcome, occur
 -- as the table owner, which RLS does not apply to.
 --
 -- Done once: the check avoids taking a table lock on every start. And it is
--- allowed to fail: this file runs before the application will answer anything,
--- so a role without the right to alter the table must cost a notice here (and
--- a finding in the operational log, which checks for it) rather than the site.
+-- allowed to fail, for any reason: this file runs before the application will
+-- answer anything, so a role without the right to alter the table, or a lock
+-- that could not be taken, must cost a notice here (and a finding in the
+-- operational log, which checks for it) rather than the site. A table left
+-- open is tried again on the next start.
 DO $$
 DECLARE
   log_table text;
@@ -1129,6 +1131,6 @@ BEGIN
       EXECUTE format('ALTER TABLE %I ENABLE ROW LEVEL SECURITY', log_table);
     END IF;
   END LOOP;
-EXCEPTION WHEN insufficient_privilege THEN
+EXCEPTION WHEN OTHERS THEN
   RAISE NOTICE 'Row level security was not enabled on the log tables: %', SQLERRM;
 END $$;

@@ -2932,10 +2932,27 @@ async function main() {
     doBlocks.length === 1 && /END \$\$$/.test(doBlocks[0]) && !schemaStatements.some((statement) => /^(END|EXCEPTION|FOREACH|EXECUTE|DECLARE|RAISE)\b/.test(statement)),
     doBlocks.length,
   );
-  check(
-    "enabling row level security on the log tables cannot stop the site starting",
-    /EXCEPTION WHEN insufficient_privilege/.test(doBlocks[0] ?? ""),
-  );
+  // …and it must not be able to stop the site from starting. Run it as a role
+  // that may not alter the tables, which is the failure it has to survive.
+  const logRls = async () =>
+    (await db.query<{ relname: string; on: boolean }>(
+      "SELECT relname, relrowsecurity AS on FROM pg_class WHERE relname IN ('action_logs', 'operation_logs') ORDER BY relname",
+    )).map((row) => `${row.relname}=${row.on}`).join(" ");
+  await db.exec("ALTER TABLE action_logs DISABLE ROW LEVEL SECURITY; CREATE ROLE kb_not_owner NOLOGIN; GRANT USAGE ON SCHEMA public TO kb_not_owner;");
+  let refused: unknown = null;
+  try {
+    await db.exec("SET ROLE kb_not_owner");
+    await db.exec(doBlocks[0]);
+  } catch (error) {
+    refused = error;
+  } finally {
+    await db.exec("RESET ROLE");
+  }
+  check("a role that may not alter the log tables gets a notice from the schema, not an error", refused === null, refused);
+  check("…and the table is left as it was, for the audit to report", (await logRls()) === "action_logs=false operation_logs=true", await logRls());
+  await db.exec(doBlocks[0]);
+  check("…and the next start, as the owner, closes it", (await logRls()) === "action_logs=true operation_logs=true", await logRls());
+  await db.exec("REVOKE USAGE ON SCHEMA public FROM kb_not_owner; DROP ROLE kb_not_owner;");
 
   // First audit writes; the second only refreshes.
   const firstAudit = await runAudit(db);

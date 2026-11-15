@@ -190,8 +190,8 @@ Error text is scrubbed of tokens, addresses and phone numbers before it is store
 
 Both tables have row level security enabled with no policies, so Supabase's public Data API cannot read them. The
 application connects as the table owner, which row level security does not apply to. The schema enables it once, and a
-database role that is not allowed to does not stop the site from starting: it leaves a notice, and the audit reports the
-tables under `SEC_TABLES_OPEN_TO_API`.
+failure to do so (a role that is not allowed to, a lock that could not be taken) does not stop the site from starting:
+it leaves a notice, the audit reports the tables under `SEC_TABLES_OPEN_TO_API`, and the next start tries again.
 
 That finding covers every table, not only the logs. Supabase serves each table in the `public` schema through its Data
 API, and a table without row level security can be read, and usually written, with the project's publishable key. The
