@@ -76,6 +76,7 @@ export default async function CounterPage() {
             <Link href="/kitchen" className="btn btn-outline btn-sm">
               Kitchen display <Icon name="arrow" size={14} />
             </Link>
+            <Link href="/counter/chat" className="btn btn-ghost btn-sm">Guest chat</Link>
             <Link href="/counter/customers" className="btn btn-ghost btn-sm">
               <Icon name="user" size={14} /> Customers
             </Link>

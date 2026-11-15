@@ -41,6 +41,8 @@ export const ADMIN_NAV: NavGroup[] = [
       { href: "/admin/logs", label: "Operational log", blurb: "What is wrong now, what was done, and what to do next.", icon: "shield" },
       { href: "/admin/orders", label: "Orders", blurb: "Every ticket with source, payment state and full event log.", icon: "bag" },
       { href: "/counter", label: "Counter portal", blurb: "Accept orders, take payment, park table bills, send payment links.", icon: "shield" },
+      { href: "/admin/chat", label: "Chat archive (admin)", blurb: "Review encrypted customer conversations.", icon: "shield" },
+      { href: "/counter/chat", label: "Guest chat queue", blurb: "Respond to live guest handoffs.", icon: "user" },
       { href: "/counter/customers", label: "Customers", blurb: "Look a guest up by name, email or mobile — including guests.", icon: "user" },
       { href: "/counter/music", label: "Counter music desk", blurb: "Front-of-house controls: stop, resume, replay, approve requests.", icon: "gear" },
       { href: "/kitchen", label: "Kitchen portal", blurb: "The queue, on the fire and packed columns with per-item ticking.", icon: "flame" },
