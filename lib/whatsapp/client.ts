@@ -766,6 +766,13 @@ export type TokenCandidate = {
   alias?: TokenAlias;
   /** Masked to the last four characters, never the whole token. */
   masked: string;
+  /**
+   * The token itself. This struct is returned only from a staff-only route and
+   * never leaves the server — the portal receives `masked`, and this field is
+   * stripped before the response. It exists so the caller can fingerprint the
+   * exact token that won rather than guessing from the resolved config.
+   */
+  token: string;
   ok: boolean;
   /** Meta's message when it refused. */
   error?: string;
@@ -835,6 +842,7 @@ export async function probeWhatsAppCredentials(): Promise<CredentialProbe> {
       envKey: candidate.envKey,
       alias: candidate.alias,
       masked: maskSecret(candidate.token),
+      token: candidate.token,
       ok: false,
     };
     try {

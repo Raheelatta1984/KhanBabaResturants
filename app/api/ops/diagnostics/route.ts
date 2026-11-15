@@ -85,7 +85,11 @@ export async function GET(request: Request) {
   // run every time somebody opens a page.
   const connection = probe ? await checkWhatsAppConnection() : null;
   const catalog = findCatalog ? await discoverWhatsAppCatalog() : null;
-  const tokens: CredentialProbe | null = probeTokens ? await probeWhatsAppCredentials() : null;
+  // The probe carries each candidate's raw token so the POST handler can
+  // fingerprint the winner. Strip it here: the browser gets the mask only.
+  const tokens: CredentialProbe | null = probeTokens
+    ? redactProbe(await probeWhatsAppCredentials())
+    : null;
 
   const problems: string[] = [];
   if (!config.configured) {
@@ -292,9 +296,14 @@ export async function POST(request: Request) {
     const probe = await probeWhatsAppCredentials();
     if (probe.winner) {
       const config = await whatsappConfig();
+      // Use the token the candidate was built from, never `config.accessToken`:
+      // if the winner came from the portal then config.accessToken is already
+      // that value, but if it came from Vercel it is a *different* token, and
+      // fingerprinting the wrong one would record proof for a token we are not
+      // sending with — the exact tick-on-a-broken-token the portal must not show.
       const fingerprint = tokenFingerprint(
         probe.winner.alias ?? "primary",
-        probe.winner.origin === "settings" ? config.accessToken : (probe.winner.envKey ? (process.env[probe.winner.envKey] ?? "") : ""),
+        probe.winner.token,
       );
       // Only record the proof for the token that is actually in use — a tick
       // against a token we are not sending with would be a lie.
@@ -306,7 +315,7 @@ export async function POST(request: Request) {
         await setSetting("whatsapp_verified_at", new Date().toISOString());
       }
     }
-    return NextResponse.json({ ok: true, probe });
+    return NextResponse.json({ ok: true, probe: redactProbe(probe) });
   }
 
   // Create the catalogue instead of sending the owner hunting for a Content ID.
@@ -326,4 +335,22 @@ export async function POST(request: Request) {
   }
 
   return NextResponse.json({ error: "Unknown action" }, { status: 400 });
+}
+
+/**
+ * Drop the raw token from every attempt. The mask is all the portal needs, and
+ * a secret that never leaves the server cannot leak through a screenshot, a
+ * browser devtools panel or a support ticket.
+ */
+function redactProbe(probe: CredentialProbe): CredentialProbe {
+  return {
+    ...probe,
+    attempts: probe.attempts.map(({ token: _token, ...rest }) => rest) as CredentialProbe["attempts"],
+    winner: probe.winner
+      ? (() => {
+          const { token: _token, ...rest } = probe.winner;
+          return rest as CredentialProbe["attempts"][number];
+        })()
+      : null,
+  };
 }

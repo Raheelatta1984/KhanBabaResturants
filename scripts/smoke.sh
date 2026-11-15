@@ -391,6 +391,47 @@ expect() { # expect <label> <want> <got>
   if [ "$2" = "$3" ]; then echo "  ok   $1"; else echo "  FAIL $1 (wanted $2, got $3)"; fail=1; fi
 }
 
+echo "Seven-day content calendar"
+CAL=$(curl -s -b "$JAR" "$BASE/api/ops/marketing/calendar")
+if printf '%s' "$CAL" | grep -q '"days"'; then
+  echo "  ok   the calendar endpoint answers"
+else
+  echo "  FAIL calendar endpoint: $CAL"
+  fail=1
+fi
+DAYS=$(printf '%s' "$CAL" | grep -o '"weekday"' | wc -l)
+if [ "$DAYS" = "7" ]; then
+  echo "  ok   the calendar has seven days"
+else
+  echo "  FAIL the calendar has $DAYS days, expected 7"
+  fail=1
+fi
+if printf '%s' "$CAL" | grep -q "across Western Sydney\|in our delivery area\|nearby suburbs"; then
+  echo "  ok   the calendar names the real delivery area"
+else
+  echo "  FAIL the calendar has no delivery area"
+  fail=1
+fi
+if printf '%s' "$CAL" | grep -qi "across Sydney"; then
+  echo "  FAIL the calendar still promises delivery across Sydney"
+  fail=1
+else
+  echo "  ok   the calendar does not promise delivery across Sydney"
+fi
+CAL_MD=$(curl -s -b "$JAR" "$BASE/api/ops/marketing/calendar?format=md")
+if printf '%s' "$CAL_MD" | grep -q "Whalan NSW 2770"; then
+  echo "  ok   the calendar markdown names the Whalan kitchen"
+else
+  echo "  FAIL calendar markdown has the wrong address"
+  fail=1
+fi
+if printf '%s' "$CAL_MD" | grep -q "Content-Length: 0"; then
+  echo "  FAIL calendar markdown is empty"
+  fail=1
+else
+  echo "  ok   the calendar markdown renders"
+fi
+
 echo "WhatsApp credential control"
 # Which token is read, and from where. These are the dials that used to be a
 # silent Vercel variable beating the portal value and presenting as Meta 190.

@@ -146,7 +146,7 @@ export class UberDirectProvider implements DeliveryProvider {
       body: JSON.stringify({
         pickup_address: addressBlock(
           settings,
-          settingValue(settings, "restaurant_address", "379 Pitt Street"),
+          settingValue(settings, "restaurant_address", "1/53 Bulolo Dr, Whalan NSW 2770"),
           settingValue(settings, "restaurant_suburb", "Sydney"),
           settingValue(settings, "restaurant_postcode", "2000"),
         ),
@@ -202,7 +202,7 @@ export class UberDirectProvider implements DeliveryProvider {
         ),
         pickup_address: addressBlock(
           settings,
-          settingValue(settings, "restaurant_address", "379 Pitt Street"),
+          settingValue(settings, "restaurant_address", "1/53 Bulolo Dr, Whalan NSW 2770"),
           settingValue(settings, "restaurant_suburb", "Sydney"),
           settingValue(settings, "restaurant_postcode", "2000"),
         ),

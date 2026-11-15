@@ -2,7 +2,7 @@
   "name": "khan-baba-platform",
   "version": "1.0.0",
   "private": true,
-  "description": "Khan Baba Restaurant — dynamic ordering, kitchen, delivery and manufacturing platform",
+  "description": "Khan Baba Restaurant \u2014 dynamic ordering, kitchen, delivery and manufacturing platform",
   "scripts": {
     "dev": "next dev -p 3000 -H 0.0.0.0",
     "build": "next build",
@@ -16,7 +16,8 @@
     "predev": "node scripts/generate-schema.mjs",
     "test:pg": "tsx scripts/test-pg.ts",
     "test:smoke": "bash scripts/smoke.sh",
-    "test": "npm run typecheck && npm run test:pg && npm run test:smoke"
+    "test": "npm run typecheck && npm run test:pg && npm run test:smoke",
+    "marketing:calendar": "tsx scripts/marketing-calendar.ts"
   },
   "dependencies": {
     "@fontsource-variable/fraunces": "^5.2.9",
