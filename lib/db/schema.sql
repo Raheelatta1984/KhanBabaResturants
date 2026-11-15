@@ -990,3 +990,16 @@ ALTER TABLE orders ADD COLUMN IF NOT EXISTS delivery_coords_verified BOOLEAN NOT
 -- public form answered "please try again".
 ALTER TABLE driver_verification_events
   ADD COLUMN IF NOT EXISTS document_id INTEGER REFERENCES driver_documents(id) ON DELETE SET NULL;
+
+-- Which Vercel variable holds the WhatsApp token (`primary` = what the app has
+-- always read, `new` = the spare alias), and proof that a token was accepted by
+-- Meta. Rotating a Meta token used to require editing the one variable in use,
+-- with no way to try the new value without breaking the live one; the alias
+-- setting makes the swap a toggle. `whatsapp_verified_token` stores only
+-- `<alias>:<last four>` — enough to say "this is the token that worked", never
+-- enough to send with.
+INSERT INTO settings (key, value) VALUES
+  ('whatsapp_env_alias', 'primary'),
+  ('whatsapp_verified_token', ''),
+  ('whatsapp_verified_at', '')
+ON CONFLICT (key) DO NOTHING;

@@ -1,15 +1,21 @@
 import { NextResponse } from "next/server";
 import { getDb } from "@/lib/db";
 import { getApiSession } from "@/lib/auth/api";
-import { getSettings, setSetting, settingValue } from "@/lib/settings";
+import { deleteSetting, getSettings, setSetting, settingValue } from "@/lib/settings";
 import {
   CONFIG_ENV_KEYS,
   CONFIG_FIELDS,
+  TOKEN_ALIASES,
   checkWhatsAppConnection,
+  createWhatsAppCatalog,
   credentialMode,
   discoverWhatsAppCatalog,
   maskSecret,
+  probeWhatsAppCredentials,
+  resolveTokenAlias,
+  tokenFingerprint,
   whatsappConfig,
+  type CredentialProbe,
 } from "@/lib/whatsapp/client";
 import { zoneSummary } from "@/lib/delivery/zones";
 
@@ -40,6 +46,7 @@ export async function GET(request: Request) {
   const url = new URL(request.url);
   const probe = url.searchParams.get("probe") === "1";
   const findCatalog = url.searchParams.get("catalog") === "1";
+  const probeTokens = url.searchParams.get("tokens") === "1";
   const config = await whatsappConfig();
   const settings = await getSettings();
   const db = await getDb();
@@ -78,6 +85,7 @@ export async function GET(request: Request) {
   // run every time somebody opens a page.
   const connection = probe ? await checkWhatsAppConnection() : null;
   const catalog = findCatalog ? await discoverWhatsAppCatalog() : null;
+  const tokens: CredentialProbe | null = probeTokens ? await probeWhatsAppCredentials() : null;
 
   const problems: string[] = [];
   if (!config.configured) {
@@ -124,6 +132,13 @@ export async function GET(request: Request) {
       phoneNumberId: config.phoneNumberId,
       businessAccountId: config.businessAccountId,
       catalogId: config.catalogId || null,
+      businessId: config.businessId || null,
+      tokenAlias: config.tokenAlias,
+      tokenEnvKey: config.tokenEnvKey,
+      fieldSources: config.fieldSources,
+      tokenVerified: config.tokenVerified,
+      verifiedToken: config.verifiedToken,
+      verifiedAt: config.verifiedAt,
       counterNumber: config.counterNumber,
       displayNumber: config.displayNumber,
       mixedSources: config.mixedSources,
@@ -133,6 +148,7 @@ export async function GET(request: Request) {
     lastFailure,
     connection,
     catalog,
+    tokens,
     deliveryZones: {
       count: zones.zones.length,
       postcodes: zones.postcodes,
@@ -175,9 +191,17 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "Not authorised" }, { status: 401 });
   }
 
-  let body: { action?: string; mode?: string; catalogId?: string };
+  let body: {
+    action?: string;
+    mode?: string;
+    catalogId?: string;
+    alias?: string;
+    field?: string;
+    value?: string;
+    name?: string;
+  };
   try {
-    body = (await request.json()) as { action?: string; mode?: string; catalogId?: string };
+    body = (await request.json()) as typeof body;
   } catch {
     return NextResponse.json({ error: "Invalid request" }, { status: 400 });
   }
@@ -215,6 +239,89 @@ export async function POST(request: Request) {
       catalogId,
       message: `Catalogue id ${catalogId} saved. Dishes can now be published to the WhatsApp catalogue.`,
       configured: config.configured,
+    });
+  }
+
+  if (body.action === "set-token-alias") {
+    const alias = resolveTokenAlias(body.alias ?? "");
+    if (body.alias && !["primary", "new"].includes(body.alias)) {
+      return NextResponse.json({ error: "Unknown token alias" }, { status: 400 });
+    }
+    await setSetting("whatsapp_env_alias", alias);
+    const config = await whatsappConfig();
+    return NextResponse.json({
+      ok: true,
+      tokenAlias: alias,
+      tokenEnvKey: TOKEN_ALIASES[alias],
+      configured: config.configured,
+      message: `Tokens are now read from ${TOKEN_ALIASES[alias]}.${
+        alias === "new" ? " Keep the old variable for one deploy so a bad rotation is a one-click rollback." : ""
+      }`,
+    });
+  }
+
+  // Per-field override of the global credential mode: "take the catalog id from
+  // Vercel but the token from the portal" is a real and reasonable setup.
+  if (body.action === "set-field-source") {
+    const field = body.field ?? "";
+    if (!(CONFIG_FIELDS as readonly string[]).includes(field)) {
+      return NextResponse.json({ error: "Unknown credential field" }, { status: 400 });
+    }
+    const raw = body.value ?? "auto";
+    if (!["auto", "env", "settings"].includes(raw)) {
+      return NextResponse.json({ error: "Unknown credential source" }, { status: 400 });
+    }
+    if (raw === "auto") await deleteSetting(`whatsapp_source_${field}`);
+    else await setSetting(`whatsapp_source_${field}`, raw);
+    const config = await whatsappConfig();
+    return NextResponse.json({
+      ok: true,
+      field,
+      source: raw,
+      resolved: config.sources[field as keyof typeof config.sources],
+      message:
+        raw === "auto"
+          ? `${CONFIG_ENV_KEYS[field as keyof typeof CONFIG_ENV_KEYS]} follows the global credential source again.`
+          : `${CONFIG_ENV_KEYS[field as keyof typeof CONFIG_ENV_KEYS]} is now read from ${raw === "env" ? "Vercel" : "the admin portal"}.`,
+    });
+  }
+
+  // Prove which token Meta accepts, and record the winner so the portal can show
+  // a tick instead of leaving the owner to guess between two variables.
+  if (body.action === "probe-tokens") {
+    const probe = await probeWhatsAppCredentials();
+    if (probe.winner) {
+      const config = await whatsappConfig();
+      const fingerprint = tokenFingerprint(
+        probe.winner.alias ?? "primary",
+        probe.winner.origin === "settings" ? config.accessToken : (probe.winner.envKey ? (process.env[probe.winner.envKey] ?? "") : ""),
+      );
+      // Only record the proof for the token that is actually in use — a tick
+      // against a token we are not sending with would be a lie.
+      const inUse =
+        config.sources.accessToken === probe.winner.origin &&
+        (probe.winner.origin === "settings" || config.tokenAlias === probe.winner.alias);
+      if (inUse && fingerprint) {
+        await setSetting("whatsapp_verified_token", fingerprint);
+        await setSetting("whatsapp_verified_at", new Date().toISOString());
+      }
+    }
+    return NextResponse.json({ ok: true, probe });
+  }
+
+  // Create the catalogue instead of sending the owner hunting for a Content ID.
+  if (body.action === "create-catalog") {
+    const result = await createWhatsAppCatalog(body.name);
+    if (!result.ok || !result.catalogId) {
+      return NextResponse.json({ ok: false, error: result.error, hint: result.hint, steps: result.steps }, { status: 400 });
+    }
+    await setSetting("whatsapp_catalog_id", result.catalogId);
+    return NextResponse.json({
+      ok: true,
+      catalogId: result.catalogId,
+      connected: result.connected,
+      steps: result.steps,
+      message: `Catalogue ${result.catalogId} is saved and ready for publishing.`,
     });
   }
 

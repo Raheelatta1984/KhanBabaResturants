@@ -121,6 +121,18 @@ export const DEFAULT_SETTINGS: Record<string, string> = {
   // the portal value wins. A stale token in Vercel used to shadow a good one in
   // the database and present only as Meta error 190.
   whatsapp_credential_mode: "auto", // auto | env | settings
+  // Which environment *alias* to read when the credential source resolves to a
+  // Vercel variable. Two aliases exist because a token rotation used to mean
+  // editing the one variable the app reads, mid-deploy, with no way to test the
+  // new token without breaking the live one. `primary` = WHATSAPP_ACCESS_TOKEN,
+  // `new` = WHATSAPP_ACCESS_TOKEN_NEW. Switching is a setting, not a deploy.
+  whatsapp_env_alias: "primary", // primary | new
+  // Set by the "Test credentials" button once a token has been proven to work:
+  // the value is `<alias>:<last four>`. It lets the portal say "the token in
+  // Vercel's WHATSAPP_ACCESS_TOKEN_NEW (••••ab12) has never been tested" instead
+  // of making you guess which of two tokens Meta is currently rejecting.
+  whatsapp_verified_token: "",
+  whatsapp_verified_at: "",
   whatsapp_phone_number_id: "",
   whatsapp_business_account_id: "",
   whatsapp_access_token: "",
@@ -277,6 +289,13 @@ export async function setSetting(
     "INSERT INTO settings (key, value) VALUES ($1, $2) ON CONFLICT (key) DO UPDATE SET value = excluded.value",
     [key, value],
   );
+  cache.delete(handle);
+}
+
+/** Remove a key, so the default in DEFAULT_SETTINGS applies again. */
+export async function deleteSetting(key: string, db?: Db): Promise<void> {
+  const handle = db ?? (await getDb());
+  await handle.query("DELETE FROM settings WHERE key = $1", [key]);
   cache.delete(handle);
 }
 

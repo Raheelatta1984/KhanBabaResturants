@@ -19,6 +19,26 @@ type Credential = {
   shadowed: boolean;
 };
 
+type TokenAttempt = {
+  origin: "settings" | "env";
+  envKey?: string;
+  alias?: "primary" | "new";
+  masked: string;
+  ok: boolean;
+  error?: string;
+  errorCode?: number;
+  hint?: string;
+  verifiedName?: string;
+  displayPhoneNumber?: string;
+};
+
+type CredentialProbe = {
+  attempts: TokenAttempt[];
+  winner: TokenAttempt | null;
+  recommendation: { credentialMode: string; tokenAlias: string | null; message: string } | null;
+  nextStep: string | null;
+};
+
 type CatalogDiscovery = {
   ok: boolean;
   configuredCatalogId: string | null;
@@ -34,6 +54,8 @@ type CatalogDiscovery = {
   error?: string;
   hint?: string;
   setupSteps: string[];
+  canCreate: boolean;
+  createBlocked?: string;
 };
 
 type Diagnostics = {
@@ -47,6 +69,13 @@ type Diagnostics = {
     phoneNumberId: string;
     businessAccountId: string;
     catalogId: string | null;
+    businessId: string | null;
+    tokenAlias: "primary" | "new";
+    tokenEnvKey: string;
+    fieldSources: Record<string, string>;
+    tokenVerified: boolean;
+    verifiedToken: string | null;
+    verifiedAt: string | null;
     mixedSources: boolean;
     shadowed: string[];
   };
@@ -71,6 +100,7 @@ type Diagnostics = {
     }[];
   };
   catalog: CatalogDiscovery | null;
+  tokens: CredentialProbe | null;
   social: {
     facebookPageId: string | null;
     facebookToken: string;
@@ -133,6 +163,99 @@ export function IntegrationDiagnostics() {
       });
       const json = (await res.json()) as { message?: string; error?: string };
       setNote(json.message ?? json.error ?? null);
+      await load();
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const probeTokens = async () => {
+    setBusy(true);
+    try {
+      const res = await fetch("/api/ops/diagnostics?tokens=1", { cache: "no-store" });
+      const json = (await res.json()) as Diagnostics & { error?: string };
+      if (json.error) setNote(json.error);
+      else setData(json);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const setAlias = async (alias: "primary" | "new") => {
+    setBusy(true);
+    try {
+      const res = await fetch("/api/ops/diagnostics", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "set-token-alias", alias }),
+      });
+      const json = (await res.json()) as { message?: string; error?: string };
+      setNote(json.message ?? json.error ?? null);
+      await load();
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const setFieldSource = async (field: string, value: string) => {
+    setBusy(true);
+    try {
+      const res = await fetch("/api/ops/diagnostics", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "set-field-source", field, value }),
+      });
+      const json = (await res.json()) as { message?: string; error?: string };
+      setNote(json.message ?? json.error ?? null);
+      await load();
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const createCatalog = async () => {
+    setBusy(true);
+    try {
+      const res = await fetch("/api/ops/diagnostics", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "create-catalog" }),
+      });
+      const json = (await res.json()) as {
+        message?: string;
+        error?: string;
+        hint?: string;
+        steps?: string[];
+      };
+      setNote(
+        [json.message ?? json.error, json.hint, ...(json.steps ?? [])]
+          .filter(Boolean)
+          .join(" · ") || null,
+      );
+      await load();
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const applyRecommendation = async () => {
+    const rec = data?.tokens?.recommendation;
+    if (!rec) return;
+    setBusy(true);
+    try {
+      await fetch("/api/ops/diagnostics", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "set-credential-mode", mode: rec.credentialMode }),
+      });
+      if (rec.tokenAlias) {
+        await fetch("/api/ops/diagnostics", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ action: "set-token-alias", alias: rec.tokenAlias }),
+        });
+      }
+      setNote("Applied. Test the connection again to confirm.");
       await load();
     } finally {
       setBusy(false);
@@ -216,7 +339,43 @@ export function IntegrationDiagnostics() {
             {mode === "settings" ? "Use admin portal" : mode === "env" ? "Use Vercel env" : "Auto"}
           </button>
         ))}
+        <button className="btn btn-sm" disabled={busy} onClick={() => void probeTokens()}>
+          <Icon name="chart" /> Which token works?
+        </button>
       </div>
+
+      <div className="row" style={{ gap: 8, flexWrap: "wrap", marginBottom: 12 }}>
+        <span className="tiny muted">
+          Token variable:&nbsp;
+          <code className="tiny">{data.whatsapp.tokenEnvKey}</code>
+          {data.whatsapp.tokenVerified ? (
+            <span className="badge badge-green" style={{ marginLeft: 6 }}>
+              proven
+            </span>
+          ) : (
+            <span className="badge badge-amber" style={{ marginLeft: 6 }}>
+              untested
+            </span>
+          )}
+        </span>
+        {(["primary", "new"] as const).map((alias) => (
+          <button
+            key={alias}
+            className={`btn btn-sm ${data.whatsapp.tokenAlias === alias ? "btn-primary" : ""}`}
+            disabled={busy}
+            onClick={() => void setAlias(alias)}
+          >
+            {alias === "new" ? "WHATSAPP_ACCESS_TOKEN_NEW" : "WHATSAPP_ACCESS_TOKEN"}
+          </button>
+        ))}
+      </div>
+
+      {!data.whatsapp.tokenVerified && data.whatsapp.tokenAlias === "new" ? (
+        <p className="tiny muted" style={{ marginBottom: 12 }}>
+          You are reading the spare variable. Press “Which token works?” — if it is rejected,
+          one click puts you back on the original token.
+        </p>
+      ) : null}
 
       {note ? <p className="small muted">{note}</p> : null}
 
@@ -226,9 +385,89 @@ export function IntegrationDiagnostics() {
             <th>Credential</th>
             <th>Source</th>
             <th>Value</th>
+            <th>Read from</th>
           </tr>
         </thead>
         <tbody>
+          {data.tokens ? (
+            <tr>
+              <td colSpan={4} style={{ padding: 0 }}>
+                <div
+                  style={{
+                    border: "1px solid var(--line)",
+                    borderRadius: 8,
+                    padding: 10,
+                    margin: "8px 0",
+                  }}
+                >
+                  <b className="small">Which token works?</b>
+                  {data.tokens.attempts.length === 0 ? (
+                    <p className="tiny muted" style={{ marginTop: 6 }}>
+                      {data.tokens.nextStep}
+                    </p>
+                  ) : (
+                    <table className="table tiny" style={{ marginTop: 6 }}>
+                      <thead>
+                        <tr>
+                          <th>Token from</th>
+                          <th>Value</th>
+                          <th>Result</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {data.tokens.attempts.map((attempt, index) => (
+                          <tr key={`${attempt.origin}-${attempt.masked}-${index}`}>
+                            <td>
+                              {attempt.origin === "settings" ? (
+                                <>Admin portal</>
+                              ) : (
+                                <code className="tiny">{attempt.envKey}</code>
+                              )}
+                            </td>
+                            <td className="tiny muted">{attempt.masked || "—"}</td>
+                            <td>
+                              {attempt.ok ? (
+                                <span className="badge badge-green">accepted</span>
+                              ) : (
+                                <span className="badge badge-amber">
+                                  {attempt.error || "rejected"}
+                                </span>
+                              )}
+                              {attempt.ok && attempt.verifiedName ? (
+                                <span className="tiny muted"> {attempt.verifiedName}</span>
+                              ) : null}
+                              {!attempt.ok && attempt.hint ? (
+                                <div className="tiny muted">{attempt.hint}</div>
+                              ) : null}
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  )}
+                  {data.tokens.recommendation ? (
+                    <p className="tiny" style={{ marginTop: 6 }}>
+                      {data.tokens.recommendation.message}{" "}
+                      {!data.tokens.recommendation.message.startsWith("The token currently") ? (
+                        <button
+                          className="btn btn-sm btn-primary"
+                          disabled={busy}
+                          onClick={() => void applyRecommendation()}
+                        >
+                          Apply
+                        </button>
+                      ) : null}
+                    </p>
+                  ) : null}
+                  {data.tokens.nextStep ? (
+                    <p className="tiny muted" style={{ marginTop: 6 }}>
+                      {data.tokens.nextStep}
+                    </p>
+                  ) : null}
+                </div>
+              </td>
+            </tr>
+          ) : null}
           {data.credentials.map((row) => (
             <tr key={row.field}>
               <td>
@@ -251,6 +490,18 @@ export function IntegrationDiagnostics() {
                 ) : null}
               </td>
               <td className="tiny muted">{row.value || "—"}</td>
+              <td>
+                <select
+                  className="input input-sm"
+                  disabled={busy}
+                  value={data.whatsapp.fieldSources[row.field] ?? "auto"}
+                  onChange={(event) => void setFieldSource(row.field, event.target.value)}
+                >
+                  <option value="auto">Follow global</option>
+                  <option value="env">Vercel</option>
+                  <option value="settings">Portal</option>
+                </select>
+              </td>
             </tr>
           ))}
         </tbody>
@@ -287,10 +538,33 @@ export function IntegrationDiagnostics() {
           <button className="btn btn-sm" disabled={busy} onClick={() => void findCatalog()}>
             <Icon name="search" size={13} /> Find my catalog
           </button>
+          {data.catalog?.canCreate ? (
+            <button className="btn btn-sm btn-primary" disabled={busy} onClick={() => void createCatalog()}>
+              Create catalogue
+            </button>
+          ) : null}
         </div>
         <p className="tiny muted" style={{ marginTop: 8 }}>
-          Asks Meta which catalogs this business account can use, and offers to save the
-          right one. Nothing is created or deleted on Meta&apos;s side.
+          “Find my catalog” asks Meta which catalogues this business account can already
+          use and offers to save the right one. “Create catalogue” makes a new one owned by
+          the business and connects it to WhatsApp in a single call, so you never have to
+          copy a Content ID out of a Commerce Manager URL.
+        </p>
+        {data.catalog?.canCreate && data.catalog.createBlocked ? (
+          <p className="tiny muted">{data.catalog.createBlocked}</p>
+        ) : null}
+        {!data.whatsapp.businessId ? (
+          <p className="tiny muted">
+            Creating a catalogue also needs the Meta business portfolio id (Business
+            settings → Business info → ID) saved as <code className="tiny">WHATSAPP_BUSINESS_ID</code>.
+            Paste it in the field on Meta&apos;s side or add it in Vercel.
+          </p>
+        ) : null}
+        <p className="tiny muted">
+          Catalogue source: <b>{data.whatsapp.credentialMode === "settings" ? "admin portal" : "credential source"}</b>
+          {" "}— a Vercel <code className="tiny">WHATSAPP_CATALOG_ID</code> wins in Auto mode, so saving an id
+          here does nothing until the source is “Use admin portal”. Set{" "}
+          <code className="tiny">catalogId</code> to <b>portal</b> in the source column below to mix.
         </p>
 
         {data.catalog ? (
