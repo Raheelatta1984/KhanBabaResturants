@@ -44,6 +44,7 @@ export default async function CounterPage() {
     paidReady,
     dineIn,
     musicPending,
+    chatPending,
   ] = await Promise.all([
     listOrders(db, { status: ["pending_confirm"], limit: 20 }),
     listOrders(db, { status: ["confirmed", "preparing"], limit: 16 }),
@@ -56,6 +57,7 @@ export default async function CounterPage() {
     paidAwaitingAcceptance(db),
     dineInStats(db),
     db.one<{ c: number }>("SELECT COUNT(*) AS c FROM music_requests WHERE status = 'pending'"),
+    db.one<{ c: number }>("SELECT COUNT(*) AS c FROM chat_conversations WHERE status = 'waiting' AND updated_at >= now() - interval '7 days'"),
   ]);
   const tableDue = await tableBillsDue(db);
 
@@ -76,6 +78,7 @@ export default async function CounterPage() {
             <Link href="/kitchen" className="btn btn-outline btn-sm">
               Kitchen display <Icon name="arrow" size={14} />
             </Link>
+            <Link href="/counter/chat" className="btn btn-ghost btn-sm">Guest chat {chatPending.c > 0 ? <span className="badge badge-amber">{chatPending.c}</span> : null}</Link>
             <Link href="/counter/customers" className="btn btn-ghost btn-sm">
               <Icon name="user" size={14} /> Customers
             </Link>

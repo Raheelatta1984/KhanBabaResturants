@@ -159,6 +159,7 @@ export function scrubText(text: string): string {
  * token until it has already been written somewhere it should not be.
  */
 export function redact(value: unknown, key = "", depth = 0, component = ""): unknown {
+  if (component === "chat" && key) return key === "action" && (value === "reply" || value === "close") ? value : "[withheld]";
   if (value === null || value === undefined) return null;
   if (depth > 4) return "[…]";
   const people = PEOPLE_COMPONENTS.has(component);
@@ -533,6 +534,10 @@ export function deriveTarget(
   }
   // Sign-in is named by the wrapper, which knows whether the account exists.
   if (component === "auth") return null;
+  if (component === "chat") {
+    const id = body?.id;
+    return typeof id === "string" && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id) ? `chat:${id}` : null;
+  }
   if (component === "settings" && body?.values && typeof body.values === "object") {
     const keys = Object.keys(body.values as Record<string, unknown>);
     return `settings:${keys.slice(0, 6).join(",")}${keys.length > 6 ? `,+${keys.length - 6}` : ""}`;
@@ -685,7 +690,9 @@ export function withActionLog<R extends Request = Request, C = RouteContext>(
 
     async function capture(): Promise<void> {
       const body = await readJson(copy, 65_536);
-      const verb = slug(body?.action) || options.fallback || request.method.toLowerCase();
+      const verb = component === "chat"
+        ? (body?.action === "reply" || body?.action === "close" ? body.action : "invalid")
+        : slug(body?.action) || options.fallback || request.method.toLowerCase();
       const status = thrown ? null : (response?.status ?? null);
       const outcome = outcomeFor(status, Boolean(thrown));
       if (outcome === "ok" && options.quiet?.includes(verb)) return;
