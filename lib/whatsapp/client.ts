@@ -22,6 +22,12 @@ export type WhatsAppConfig = {
   configured: boolean;
   phoneNumberId: string;
   businessAccountId: string;
+  /**
+   * The Meta business portfolio id (Business settings → Business info → ID).
+   * Distinct from the WABA id: catalogues are owned by the portfolio, messages
+   * belong to the WABA. Needed only to create a catalogue via the API.
+   */
+  businessId: string;
   accessToken: string;
   catalogId: string;
   verifyToken: string;
@@ -52,12 +58,36 @@ export type WhatsAppConfig = {
    * in the portal, and the only symptom was Meta's "Authentication Error".
    */
   credentialMode: "auto" | "env" | "settings";
+  /**
+   * Which Vercel variable the token is read from. Two aliases exist because
+   * rotating a Meta token used to mean editing the single variable the app
+   * reads — with no way to try the new one without breaking the live one, and
+   * no way to fall back except another deploy. Switching is a setting now.
+   */
+  tokenAlias: "primary" | "new";
+  /** The environment variable actually read for the token. */
+  tokenEnvKey: string;
+  /** Per-field overrides of the global mode, e.g. read the catalog id from Vercel. */
+  fieldSources: Partial<Record<ConfigField, CredentialMode>>;
+  /** True when the resolved token is the one "Test credentials" proved works. */
+  tokenVerified: boolean;
+  /** `<alias>:<last four>` of the token that was last proven good, if any. */
+  verifiedToken: string | null;
+  /** When that proof happened, ISO string. */
+  verifiedAt: string | null;
 };
+
+export type CredentialMode = "auto" | "env" | "settings";
+
+/** The two Vercel variables that can hold a token, in display order. */
+export const TOKEN_ALIASES = { primary: "WHATSAPP_ACCESS_TOKEN", new: "WHATSAPP_ACCESS_TOKEN_NEW" } as const;
+export type TokenAlias = keyof typeof TOKEN_ALIASES;
 
 export const CONFIG_FIELDS = [
   "phoneNumberId",
   "accessToken",
   "businessAccountId",
+  "businessId",
   "catalogId",
   "verifyToken",
   "appSecret",
@@ -72,6 +102,7 @@ export const CONFIG_ENV_KEYS: Record<ConfigField, string> = {
   phoneNumberId: "WHATSAPP_PHONE_NUMBER_ID",
   accessToken: "WHATSAPP_ACCESS_TOKEN",
   businessAccountId: "WHATSAPP_BUSINESS_ACCOUNT_ID",
+  businessId: "WHATSAPP_BUSINESS_ID",
   catalogId: "WHATSAPP_CATALOG_ID",
   verifyToken: "WHATSAPP_VERIFY_TOKEN",
   appSecret: "WHATSAPP_APP_SECRET",
@@ -138,30 +169,66 @@ export function maskSecret(value: string): string {
   return `••••${trimmed.slice(-4)}`;
 }
 
-/** Resolve the channel configuration. Environment variables win over settings. */
+/**
+ * Resolve the channel configuration.
+ *
+ * Precedence is deliberate and per-field, because one global switch cannot
+ * express what actually goes wrong in production. The real incident was a
+ * stale `sensitive` Vercel variable silently beating a good token saved in the
+ * portal, so the portal said "configured" and Meta answered 190. Now:
+ *
+ *   - the credential *mode* picks the winner: `env`, `settings`, or `auto`
+ *     (auto = Vercel first, the historical behaviour)
+ *   - the token has two aliases (`WHATSAPP_ACCESS_TOKEN` / `..._NEW`) chosen by
+ *     a setting, so a rotation is a switch rather than a deploy
+ *   - any single field may override the global mode, so "read the catalog id
+ *     from Vercel but the token from the portal" is expressible
+ *   - the loser is never discarded: a portal value beaten by a variable is
+ *     reported as `shadowed`, and the portal can say so instead of you
+ *     debugging a green tick and a Meta 190.
+ */
 export async function whatsappConfig(): Promise<WhatsAppConfig> {
   const settings = await getSettings();
   const value = (key: string) => settingValue(settings, key, "");
   const mode = credentialMode(value("whatsapp_credential_mode"));
-  const phoneNumberId = resolve("WHATSAPP_PHONE_NUMBER_ID", value("whatsapp_phone_number_id"), mode);
-  const accessToken = resolve("WHATSAPP_ACCESS_TOKEN", value("whatsapp_access_token"), mode);
-  const businessAccountId = resolve(
+  const tokenAlias = resolveTokenAlias(value("whatsapp_env_alias"));
+  const tokenEnvKey = TOKEN_ALIASES[tokenAlias];
+
+  const fieldSources: Partial<Record<ConfigField, CredentialMode>> = {};
+  for (const field of CONFIG_FIELDS) {
+    const raw = credentialMode(value(`whatsapp_source_${field}`));
+    // A stored "auto" is the default, so only keep a real override.
+    if (value(`whatsapp_source_${field}`) && raw !== "auto") fieldSources[field] = raw;
+  }
+
+  const pick = (field: ConfigField, envKey: string, setting: string) =>
+    resolve(envKey, setting, fieldSources[field] ?? mode);
+
+  const phoneNumberId = pick("phoneNumberId", "WHATSAPP_PHONE_NUMBER_ID", value("whatsapp_phone_number_id"));
+  const accessToken = pick("accessToken", tokenEnvKey, value("whatsapp_access_token"));
+  const businessAccountId = pick(
+    "businessAccountId",
     "WHATSAPP_BUSINESS_ACCOUNT_ID",
     value("whatsapp_business_account_id"),
-    mode,
   );
-  const catalogId = resolve("WHATSAPP_CATALOG_ID", value("whatsapp_catalog_id"), mode);
-  const verifyToken = resolve("WHATSAPP_VERIFY_TOKEN", value("whatsapp_verify_token"), mode);
-  const appSecret = resolve("WHATSAPP_APP_SECRET", value("whatsapp_app_secret"), mode);
-  const counterNumber = resolve("WHATSAPP_COUNTER_NUMBER", value("whatsapp_counter_number"), mode);
-  const displayNumber = resolve("WHATSAPP_DISPLAY_NUMBER", value("whatsapp_display_number"), mode);
+  const businessId = pick("businessId", "WHATSAPP_BUSINESS_ID", value("whatsapp_business_id"));
+  const catalogId = pick("catalogId", "WHATSAPP_CATALOG_ID", value("whatsapp_catalog_id"));
+  const verifyToken = pick("verifyToken", "WHATSAPP_VERIFY_TOKEN", value("whatsapp_verify_token"));
+  const appSecret = pick("appSecret", "WHATSAPP_APP_SECRET", value("whatsapp_app_secret"));
+  const counterNumber = pick("counterNumber", "WHATSAPP_COUNTER_NUMBER", value("whatsapp_counter_number"));
+  const displayNumber = pick("displayNumber", "WHATSAPP_DISPLAY_NUMBER", value("whatsapp_display_number"));
+
   const enabled = value("whatsapp_enabled") !== "0";
   const configured = Boolean(phoneNumberId.value && accessToken.value);
+  const verifiedToken = value("whatsapp_verified_token") || null;
+  const verifiedAt = value("whatsapp_verified_at") || null;
+
   return {
     enabled,
     configured,
     phoneNumberId: phoneNumberId.value,
     businessAccountId: businessAccountId.value,
+    businessId: businessId.value,
     accessToken: accessToken.value,
     catalogId: catalogId.value,
     verifyToken: verifyToken.value,
@@ -174,6 +241,7 @@ export async function whatsappConfig(): Promise<WhatsAppConfig> {
       phoneNumberId: phoneNumberId.source,
       accessToken: accessToken.source,
       businessAccountId: businessAccountId.source,
+      businessId: businessId.source,
       catalogId: catalogId.source,
       verifyToken: verifyToken.source,
       appSecret: appSecret.source,
@@ -181,6 +249,12 @@ export async function whatsappConfig(): Promise<WhatsAppConfig> {
       displayNumber: displayNumber.source,
     },
     credentialMode: mode,
+    tokenAlias,
+    tokenEnvKey,
+    fieldSources,
+    tokenVerified: Boolean(verifiedToken) && verifiedToken === tokenFingerprint(tokenAlias, accessToken.value),
+    verifiedToken,
+    verifiedAt,
     mixedSources: hasBothSources([
       phoneNumberId.source,
       accessToken.source,
@@ -192,6 +266,7 @@ export async function whatsappConfig(): Promise<WhatsAppConfig> {
         ["phoneNumberId", phoneNumberId],
         ["accessToken", accessToken],
         ["businessAccountId", businessAccountId],
+        ["businessId", businessId],
         ["catalogId", catalogId],
         ["verifyToken", verifyToken],
         ["appSecret", appSecret],
@@ -202,6 +277,22 @@ export async function whatsappConfig(): Promise<WhatsAppConfig> {
       .filter(([, resolved]) => resolved.shadowed)
       .map(([field]) => field),
   };
+}
+
+/** Normalise the stored alias. Anything unknown falls back to the primary. */
+export function resolveTokenAlias(value: string): TokenAlias {
+  return value === "new" ? "new" : "primary";
+}
+
+/**
+ * `<alias>:<last four>` — identifies a token for the "has this been proven
+ * good?" check without storing anything that could be used to send a message.
+ * The last four characters are not secret; the rest never leaves Meta.
+ */
+export function tokenFingerprint(alias: TokenAlias, token: string): string {
+  const trimmed = (token ?? "").trim();
+  if (!trimmed) return "";
+  return `${alias}:${trimmed.slice(-4)}`;
 }
 
 /** Digits only, E.164 without the plus — what the Cloud API expects. */
@@ -655,6 +746,163 @@ export function whatsappChatLink(number: string, message?: string): string {
 }
 
 /**
+ * Try every place a token can come from and report which one Meta accepts.
+ *
+ * This exists because "Authentication Error" names a symptom, not a token. With
+ * a portal value and two Vercel aliases in play there are up to four candidate
+ * tokens, and the only honest answer to "which one do I fix?" is to try them
+ * all and say. Nothing here is destructive: each candidate is a read-only
+ * `GET /{phone_number_id}`. The first that works is recorded as the proven
+ * token so the portal can show a tick rather than a guess.
+ *
+ * The winning combination is returned as a concrete instruction — set the
+ * source to X and the alias to Y — so the fix is one click, not a hunt.
+ */
+export type TokenCandidate = {
+  /** Where this token came from. */
+  origin: "settings" | "env";
+  /** The Vercel variable name, when origin is env. */
+  envKey?: string;
+  alias?: TokenAlias;
+  /** Masked to the last four characters, never the whole token. */
+  masked: string;
+  ok: boolean;
+  /** Meta's message when it refused. */
+  error?: string;
+  errorCode?: number;
+  hint?: string;
+  /** The verified business name when it worked. */
+  verifiedName?: string;
+  displayPhoneNumber?: string;
+};
+
+export type CredentialProbe = {
+  attempts: TokenCandidate[];
+  /** The candidate that worked, or null when none did. */
+  winner: TokenCandidate | null;
+  /** What to change so the app uses the working token. */
+  recommendation: {
+    credentialMode: CredentialMode;
+    tokenAlias: TokenAlias | null;
+    message: string;
+  } | null;
+  /** Present when nothing worked — the next thing to check, in plain English. */
+  nextStep: string | null;
+};
+
+export async function probeWhatsAppCredentials(): Promise<CredentialProbe> {
+  const settings = await getSettings();
+  const value = (key: string) => settingValue(settings, key, "");
+  const phoneNumberId =
+    (process.env.WHATSAPP_PHONE_NUMBER_ID ?? "").trim() || value("whatsapp_phone_number_id");
+
+  const candidates: { origin: "settings" | "env"; envKey?: string; alias?: TokenAlias; token: string }[] = [];
+  const portalToken = value("whatsapp_access_token").trim();
+  if (portalToken) candidates.push({ origin: "settings", token: portalToken });
+  for (const alias of Object.keys(TOKEN_ALIASES) as TokenAlias[]) {
+    const envKey = TOKEN_ALIASES[alias];
+    const token = (process.env[envKey] ?? "").trim();
+    // Both aliases can legitimately hold the same value; trying it twice would
+    // just print the same failure twice and make the list look worse than it is.
+    if (token && !candidates.some((entry) => entry.token === token)) {
+      candidates.push({ origin: "env", envKey, alias, token });
+    }
+  }
+
+  if (!phoneNumberId) {
+    return {
+      attempts: [],
+      winner: null,
+      recommendation: null,
+      nextStep:
+        "No phone number id is set, so a token cannot be tested. Add WHATSAPP_PHONE_NUMBER_ID in Vercel, or WhatsApp Phone Number ID in Admin → WhatsApp Business.",
+    };
+  }
+  if (candidates.length === 0) {
+    return {
+      attempts: [],
+      winner: null,
+      recommendation: null,
+      nextStep:
+        "No token found anywhere. Save your System User token in Admin → WhatsApp Business, or add WHATSAPP_ACCESS_TOKEN in Vercel.",
+    };
+  }
+
+  const attempts: TokenCandidate[] = [];
+  for (const candidate of candidates) {
+    const base: TokenCandidate = {
+      origin: candidate.origin,
+      envKey: candidate.envKey,
+      alias: candidate.alias,
+      masked: maskSecret(candidate.token),
+      ok: false,
+    };
+    try {
+      const response = await fetch(
+        `${GRAPH_BASE}/${phoneNumberId}?fields=verified_name,display_phone_number`,
+        { headers: { Authorization: `Bearer ${candidate.token}` }, cache: "no-store" },
+      );
+      const data = (await response.json().catch(() => ({}))) as Record<string, unknown>;
+      if (response.ok) {
+        attempts.push({
+          ...base,
+          ok: true,
+          verifiedName: String(data.verified_name ?? ""),
+          displayPhoneNumber: String(data.display_phone_number ?? ""),
+        });
+      } else {
+        const failure = graphFailure(data, response.status);
+        attempts.push({
+          ...base,
+          error: failure.error,
+          errorCode: failure.code,
+          hint: whatsappErrorHint(failure.code, failure.subcode),
+        });
+      }
+    } catch (error) {
+      attempts.push({
+        ...base,
+        error: error instanceof Error ? error.message : "Request failed",
+      });
+    }
+  }
+
+  const winner = attempts.find((attempt) => attempt.ok) ?? null;
+  if (!winner) {
+    const codes = attempts.map((attempt) => attempt.errorCode).filter(Boolean);
+    const allAuth = codes.length > 0 && codes.every((code) => code === 190);
+    return {
+      attempts,
+      winner: null,
+      recommendation: null,
+      nextStep: allAuth
+        ? "Every token was rejected with Meta error 190, so the problem is not which token you pick — all of them are invalid. Generate a fresh System User token at business.facebook.com/settings/system-users (expiry: Never) and save it in Admin → WhatsApp Business, then test again."
+        : "No candidate token was accepted. Check that the phone number id belongs to the same WhatsApp Business Account as the token, and that the token has the whatsapp_business_messaging scope.",
+    };
+  }
+
+  const current = await whatsappConfig();
+  const alreadyActive =
+    current.sources.accessToken === winner.origin &&
+    (winner.origin === "settings" || current.tokenAlias === winner.alias);
+  const credentialMode: CredentialMode = winner.origin === "settings" ? "settings" : "env";
+  const tokenAlias: TokenAlias | null = winner.alias ?? null;
+  const where = winner.origin === "settings" ? "Admin → WhatsApp Business" : `Vercel's ${winner.envKey}`;
+  return {
+    attempts,
+    winner,
+    recommendation: {
+      credentialMode,
+      tokenAlias,
+      message: alreadyActive
+        ? `The token currently in use (${where}, ••••${winner.masked.slice(-4)}) is accepted by Meta. Nothing to change.`
+        : `The token in ${where} (••••${winner.masked.slice(-4)}) is accepted by Meta. Switch the source to “${credentialMode === "settings" ? "Use admin portal" : "Use Vercel env"}”${tokenAlias ? ` and the token alias to “${tokenAlias === "new" ? "WHATSAPP_ACCESS_TOKEN_NEW" : "WHATSAPP_ACCESS_TOKEN"}”` : ""} to start using it.`,
+    },
+    nextStep: null,
+  };
+}
+
+/**
  * Discover the WhatsApp catalog id from Meta instead of hunting the UI.
  *
  * The catalog id is the one value in the whole setup that an owner cannot find
@@ -684,6 +932,14 @@ export type CatalogDiscovery = {
   error?: string;
   hint?: string;
   setupSteps: string[];
+  /**
+   * True when the token has the `catalog_management` scope, so the portal can
+   * offer to create the catalogue instead of sending the owner hunting through
+   * Commerce Manager. Detected by trying, not by asking Meta for a scope list.
+   */
+  canCreate: boolean;
+  /** Why creation is unavailable, when it is. */
+  createBlocked?: string;
 };
 
 type CatalogNode = { id?: string; name?: string; product_catalog?: { id?: string; name?: string }[] };
@@ -721,6 +977,8 @@ export async function discoverWhatsAppCatalog(): Promise<CatalogDiscovery> {
       error: "WhatsApp is not configured yet.",
       hint: "Add the phone number id and a valid access token first — the catalog lookup uses the same token.",
       setupSteps,
+      canCreate: false,
+      createBlocked: "WhatsApp is not configured yet.",
     };
   }
   if (!config.businessAccountId) {
@@ -734,6 +992,8 @@ export async function discoverWhatsAppCatalog(): Promise<CatalogDiscovery> {
       error: "No business account id (WABA id) is set.",
       hint: "It is the “WhatsApp Business Account ID” on Meta → WhatsApp → API setup, next to the phone number id.",
       setupSteps,
+      canCreate: false,
+      createBlocked: "A business account id (WABA id) is required to create a catalogue.",
     };
   }
 
@@ -796,6 +1056,8 @@ export async function discoverWhatsAppCatalog(): Promise<CatalogDiscovery> {
       error: waba.error ?? connected.error ?? "Meta rejected the lookup",
       hint: whatsappErrorHint(waba.code, waba.subcode),
       setupSteps,
+      canCreate: false,
+      createBlocked: "The catalog lookup failed, so creating one is not attempted.",
     };
   }
 
@@ -807,5 +1069,106 @@ export async function discoverWhatsAppCatalog(): Promise<CatalogDiscovery> {
     catalogs,
     suggestedCatalogId: suggested,
     setupSteps,
+    canCreate: catalogs.length === 0,
+    createBlocked:
+      catalogs.length === 0
+        ? undefined
+        : "A catalogue already exists — pick it below instead of making another.",
+  };
+}
+
+/**
+ * Create the WhatsApp catalogue and connect it to the business account.
+ *
+ * Asking the owner to go to Commerce Manager, add a catalogue, copy a Content
+ * ID out of a URL and come back is exactly the step that stalls the setup. The
+ * catalogue is just a Graph object owned by the business, so if the token has
+ * `catalog_management` we can make it, connect it, and return the id that the
+ * rest of the app needs. When the scope is missing we say so precisely instead
+ * of failing with a cryptic 200.
+ */
+export type CreateCatalogResult = {
+  ok: boolean;
+  catalogId?: string;
+  name?: string;
+  connected?: boolean;
+  error?: string;
+  hint?: string;
+  steps: string[];
+};
+
+export async function createWhatsAppCatalog(name?: string): Promise<CreateCatalogResult> {
+  const config = await whatsappConfig();
+  const steps: string[] = [];
+  const catalogName = (name ?? "").trim() || "Khan Baba Menu";
+
+  if (!config.configured) {
+    return {
+      ok: false,
+      error: "WhatsApp is not configured yet",
+      hint: "Add the phone number id and access token first — creating a catalogue uses the same token.",
+      steps,
+    };
+  }
+  const businessId = config.businessId;
+  if (!businessId) {
+    return {
+      ok: false,
+      error: "No Meta business id is available",
+      hint:
+        "Creating a catalogue needs the business portfolio id (Business settings → Business info → ID). Add WHATSAPP_BUSINESS_ID in Vercel, or create the catalogue by hand in Commerce Manager and paste its Content ID.",
+      steps: [
+        "Business settings → Business info → copy the business portfolio id (15–16 digits).",
+        "Add it in Vercel as WHATSAPP_BUSINESS_ID, then redeploy.",
+        "Come back here and press “Create catalogue”.",
+      ],
+    };
+  }
+
+  const created = await postGraph(config, `${businessId}/owned_product_catalogs`, {
+    name: catalogName,
+    // The catalogue is a menu: vertical=commerce is the generic retail type and
+    // is what "Online products" maps to in Commerce Manager.
+    vertical: "commerce",
+  });
+  if (!created.ok) {
+    const scopeMissing = created.code === 200 || created.code === 100 || /permission|scope/i.test(created.error ?? "");
+    return {
+      ok: false,
+      error: created.error,
+      hint: scopeMissing
+        ? "The token cannot create catalogues. Add the catalog_management scope to the System User token (business.facebook.com/settings/system-users), or create the catalogue in Commerce Manager and paste its Content ID."
+        : whatsappErrorHint(created.code, created.subcode),
+      steps,
+    };
+  }
+
+  const catalogId = String(created.data.id ?? "");
+  if (!catalogId) {
+    return {
+      ok: false,
+      error: "Meta created the catalogue but did not return an id",
+      hint: "Open Commerce Manager and copy the Content ID from the catalogue.",
+      steps,
+    };
+  }
+  steps.push(`Catalogue “${catalogName}” created with id ${catalogId}.`);
+
+  // Connect it to the WhatsApp business account so it appears in the chat.
+  const connected = await postGraph(config, `${config.businessAccountId}/product_catalogs`, {
+    catalog_id: catalogId,
+  });
+  steps.push(
+    connected.ok
+      ? "Connected to the WhatsApp business account — customers can now browse it in chat."
+      : `Could not connect it automatically (${connected.error ?? "unknown error"}). Connect it in WhatsApp Manager → Account tools → Catalog.`,
+  );
+
+  return {
+    ok: true,
+    catalogId,
+    name: catalogName,
+    connected: connected.ok,
+    steps,
   };
 }

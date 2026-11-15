@@ -74,6 +74,7 @@ import {
 import { priceCart } from "../lib/cart";
 import {
   DEFAULT_COMMUNITY_AUTO_REPLY,
+  deleteSetting,
   getSetting,
   getSettingNumber,
   getSettings,
@@ -2292,6 +2293,108 @@ async function main() {
       audience.every((row) => optedDigits.has(row.wa_id)),
       audience.map((row) => row.wa_id),
     );
+  }
+
+  // -------------------------------------------------------------------------
+  // Credential resolution: which token is read, and from where
+  // -------------------------------------------------------------------------
+  section("WhatsApp credential resolution");
+
+  // The incident this guards: a stale `sensitive` Vercel variable beat a good
+  // token in the portal, the portal showed a green tick, and Meta answered 190.
+  const { resolveTokenAlias, tokenFingerprint, credentialMode: modeOf } = await import(
+    "../lib/whatsapp/client"
+  );
+
+  check("the token alias defaults to the primary variable", resolveTokenAlias("") === "primary");
+  check("an unknown alias cannot smuggle in a third variable", resolveTokenAlias("WHATEVER") === "primary");
+  check("the spare alias is selectable", resolveTokenAlias("new") === "new");
+
+  const fingerprint = tokenFingerprint("primary", "EAAG-super-secret-token-ab12");
+  check("a fingerprint ends in the last four characters", fingerprint === "primary:ab12", fingerprint);
+  check("a fingerprint never contains the whole token", !fingerprint.includes("super-secret"));
+  check("an empty token has no fingerprint", tokenFingerprint("primary", "") === "");
+  check(
+    "two different tokens with the same tail still differ by alias",
+    tokenFingerprint("primary", "aaa-ab12") !== tokenFingerprint("new", "bbb-ab12"),
+  );
+
+  check("the default mode is auto", modeOf("") === "auto");
+  check("a garbage mode falls back to auto rather than breaking sends", modeOf("hunter2") === "auto");
+  check("settings mode is honoured", modeOf("settings") === "settings");
+
+  // End-to-end through the real resolver: env must win in auto, portal in settings.
+  const previousToken = process.env.WHATSAPP_ACCESS_TOKEN;
+  const previousNew = process.env.WHATSAPP_ACCESS_TOKEN_NEW;
+  const previousPhone = process.env.WHATSAPP_PHONE_NUMBER_ID;
+  const previousCatalog = process.env.WHATSAPP_CATALOG_ID;
+  try {
+    await setSetting("whatsapp_phone_number_id", "1111222233334444", db);
+    await setSetting("whatsapp_access_token", "PORTAL-TOKEN-9999", db);
+    await setSetting("whatsapp_credential_mode", "auto", db);
+    await setSetting("whatsapp_env_alias", "primary", db);
+    await deleteSetting("whatsapp_source_accessToken", db);
+    process.env.WHATSAPP_PHONE_NUMBER_ID = "1111222233334444";
+    process.env.WHATSAPP_ACCESS_TOKEN = "VERCEL-TOKEN-1111";
+
+    const auto = await whatsappConfig();
+    check("in auto mode the Vercel token wins", auto.accessToken === "VERCEL-TOKEN-1111", auto.sources.accessToken);
+    check("the portal token is reported as shadowed, not hidden", auto.shadowed.includes("accessToken"));
+    check("the resolver names the variable it read", auto.tokenEnvKey === "WHATSAPP_ACCESS_TOKEN", auto.tokenEnvKey);
+
+    await setSetting("whatsapp_credential_mode", "settings", db);
+    const portal = await whatsappConfig();
+    check("in settings mode the portal token wins", portal.accessToken === "PORTAL-TOKEN-9999", portal.sources.accessToken);
+    check("the overridden Vercel value is reported as shadowed", portal.shadowed.includes("accessToken"));
+
+    // The alias switch is the whole point: same deploy, different variable.
+    await setSetting("whatsapp_credential_mode", "auto", db);
+    process.env.WHATSAPP_ACCESS_TOKEN_NEW = "NEWVERCEL-TOKEN-2222";
+    await setSetting("whatsapp_env_alias", "new", db);
+    const spare = await whatsappConfig();
+    check("switching the alias reads the spare variable", spare.accessToken === "NEWVERCEL-TOKEN-2222", spare.accessToken);
+    check("the spare alias is reported honestly", spare.tokenEnvKey === "WHATSAPP_ACCESS_TOKEN_NEW", spare.tokenEnvKey);
+    check("switching the alias needs no redeploy", spare.tokenAlias === "new");
+
+    // A token is only "verified" when the stored proof matches the token in use.
+    await setSetting("whatsapp_verified_token", "new:2222", db);
+    check("the token in use is reported as proven", (await whatsappConfig()).tokenVerified === true);
+    await setSetting("whatsapp_verified_token", "primary:1111", db);
+    const stale = await whatsappConfig();
+    check("proof for a different token is not mistaken for this one", stale.tokenVerified === false);
+    check("the stale proof is still shown so the UI can explain it", stale.verifiedToken === "primary:1111");
+
+    // Per-field override: read the catalogue id from Vercel, the token from the portal.
+    await setSetting("whatsapp_credential_mode", "settings", db);
+    process.env.WHATSAPP_CATALOG_ID = "5555666677";
+    await setSetting("whatsapp_catalog_id", "8888999900", db);
+    const mixedDefault = await whatsappConfig();
+    check("without an override the catalogue follows the global mode", mixedDefault.catalogId === "8888999900", mixedDefault.catalogId);
+    await setSetting("whatsapp_source_catalogId", "env", db);
+    const overridden = await whatsappConfig();
+    check("a single field can be pinned to Vercel while the token stays in the portal", overridden.catalogId === "5555666677", overridden.catalogId);
+    check("the pin leaves the token reading from the portal", overridden.accessToken === "PORTAL-TOKEN-9999", overridden.sources.accessToken);
+    check("the override is reported per field", overridden.fieldSources.catalogId === "env");
+    await deleteSetting("whatsapp_source_catalogId", db);
+    check("clearing the pin returns the field to the global mode", (await whatsappConfig()).catalogId === "8888999900");
+  } finally {
+    // Put the environment back exactly as it was: this harness shares the
+    // process with every later check.
+    if (previousToken === undefined) delete process.env.WHATSAPP_ACCESS_TOKEN;
+    else process.env.WHATSAPP_ACCESS_TOKEN = previousToken;
+    if (previousNew === undefined) delete process.env.WHATSAPP_ACCESS_TOKEN_NEW;
+    else process.env.WHATSAPP_ACCESS_TOKEN_NEW = previousNew;
+    if (previousPhone === undefined) delete process.env.WHATSAPP_PHONE_NUMBER_ID;
+    else process.env.WHATSAPP_PHONE_NUMBER_ID = previousPhone;
+    if (previousCatalog === undefined) delete process.env.WHATSAPP_CATALOG_ID;
+    else process.env.WHATSAPP_CATALOG_ID = previousCatalog;
+    deleteSetting("whatsapp_source_accessToken", db).catch(() => {});
+    setSetting("whatsapp_credential_mode", "auto", db).catch(() => {});
+    setSetting("whatsapp_env_alias", "primary", db).catch(() => {});
+    setSetting("whatsapp_verified_token", "", db).catch(() => {});
+    deleteSetting("whatsapp_catalog_id", db).catch(() => {});
+    deleteSetting("whatsapp_phone_number_id", db).catch(() => {});
+    deleteSetting("whatsapp_access_token", db).catch(() => {});
   }
 
   await harness.close();
