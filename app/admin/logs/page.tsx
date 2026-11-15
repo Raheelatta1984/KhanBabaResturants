@@ -134,8 +134,9 @@ export default async function LogsPage({ searchParams }: { searchParams: Promise
           <dd>Ordered steps. Each names an owner, where to do it, and what you should see when it has worked.</dd>
           <dt>privacy</dt>
           <dd>
-            Passwords, tokens and setting values are never stored; customer and driver details are withheld; emails
-            and phone numbers are masked.
+            Passwords, tokens and setting values are never stored. Customer and driver details are withheld, and an
+            email address or phone number inside a request is masked. The one address kept in full is the login of
+            the member of staff who acted, because the log exists to say who did what.
           </dd>
           <dt>retention</dt>
           <dd>

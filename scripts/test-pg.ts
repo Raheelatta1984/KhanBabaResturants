@@ -2769,6 +2769,35 @@ async function main() {
   });
   check("every screen a course of action names exists", deadTargets.length === 0, deadTargets);
 
+  // …and a step that says press “this” must name something written on a
+  // screen. The first version of the demo-password finding said “Go live”,
+  // which no screen has: the button is “Remove demo credentials”.
+  const screenText = (() => {
+    const parts: string[] = [read("lib/nav.ts")];
+    const walk = (dir: string) => {
+      for (const entry of nodeFs.readdirSync(nodePath.join(process.cwd(), dir), { withFileTypes: true })) {
+        const file = `${dir}/${entry.name}`;
+        if (entry.isDirectory()) walk(file);
+        else if (entry.name.endsWith(".tsx")) parts.push(read(file));
+      }
+    };
+    walk("app");
+    walk("components");
+    return parts.join("\n").replace(/&amp;/g, "&").replace(/\s+/g, " ");
+  })();
+  // Quoted, but not this site's screens: a suburb, a line in the function
+  // log, and the name of a check in Supabase's own dashboard.
+  const NOT_ON_A_SCREEN = new Set(["Whalan", "Release notes not published", "RLS Disabled in Public"]);
+  const quotedInSteps: string[] = [];
+  for (const file of ["lib/ops/playbook.ts", "lib/ops/log.ts"]) {
+    for (const match of read(file).matchAll(/“([^”]{2,80})”/g)) {
+      if (!match[1].includes("${") && !NOT_ON_A_SCREEN.has(match[1])) quotedInSteps.push(match[1]);
+    }
+  }
+  const notOnAnyScreen = [...new Set(quotedInSteps)].filter((phrase) => !screenText.includes(phrase));
+  check("the courses of action quote buttons and headings", quotedInSteps.length >= 20, quotedInSteps.length);
+  check("every button or heading a course of action quotes is written on a screen", notOnAnyScreen.length === 0, notOnAnyScreen);
+
   // -------------------------------------------------------------------------
   // Settings: a saved value must not be served stale
   // -------------------------------------------------------------------------
@@ -2886,7 +2915,12 @@ async function main() {
   const floorFinding = await demoFinding();
   check("an active login on the published demo password is reported", Boolean(floorFinding), floorFinding?.title);
   check("…as an error, naming the account", floorFinding?.severity === "error" && (floorFinding?.detail ?? "").includes(floorLogin.email), [floorFinding?.severity, floorFinding?.detail]);
-  check("…with go-live as the first step, for the owner", /Go live/.test(floorFinding?.steps?.[0]?.do ?? "") && floorFinding?.steps?.[0]?.owner === "owner", floorFinding?.steps?.[0]);
+  check("…with removing the demo credentials as the first step, for the owner", /“Remove demo credentials”/.test(floorFinding?.steps?.[0]?.do ?? "") && floorFinding?.steps?.[0]?.owner === "owner", floorFinding?.steps?.[0]);
+  check(
+    "…which warns that the other demo logins are switched off, and is followed by giving them back",
+    /switched off in the same step/.test(floorFinding?.steps?.[0]?.do ?? "") && /reset the password/.test(floorFinding?.steps?.[1]?.do ?? ""),
+    floorFinding?.steps?.slice(0, 2),
+  );
   await db.query("UPDATE staff SET password_hash = $1, active = TRUE WHERE id = $2", [hashPassword(DEMO_PASSWORD), adminLogin.id]);
   const adminFinding = await demoFinding();
   check("…and as critical once an administrator is on it", adminFinding?.severity === "critical", adminFinding?.severity);

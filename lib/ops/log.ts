@@ -662,8 +662,8 @@ async function checkSecurity(db: Db): Promise<Finding[]> {
             demoCustomerAccounts: demo.customers,
           },
           steps: [
-            { do: "Run “Go live” with a new administrator password. It retires every demo login in one step.", where: "/admin/staff", owner: "owner", verify: "The sign-in page no longer lists demo accounts and the demo password is refused." },
-            { do: "Create a named login for each person who needs one.", where: "/admin/staff", owner: "owner" },
+            { do: "Open Users & access and, under “Demo credentials are still switched on”, press “Remove demo credentials”. If your own login is on the demo password it asks you for a new one first. Pick a quiet moment: every other login still on the demo password is switched off in the same step.", where: "/admin/staff", owner: "owner", verify: "The sign-in page no longer lists demo accounts and the demo password is refused." },
+            { do: "Give each person their login back: reset the password on each account that was switched off, then enable it again.", where: "/admin/staff", owner: "owner", verify: "Each person can sign in on their own device." },
             { do: "Review who signed in while the demo password was live.", where: "/admin/logs?view=actions&component=auth", owner: "owner", verify: "Every auth.login row is a person you recognise." },
           ],
           context:

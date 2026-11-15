@@ -169,7 +169,8 @@ database access, so it is unit-tested and cannot itself fail an action.
   nothing is left to do.
 
 To add a course for a new action, add a `case` to `followUp` (success) or a class to `classify` and `failureCourse`
-(failure). `scripts/test-pg.ts` checks that every in-app path a step names is a page that exists.
+(failure). `scripts/test-pg.ts` checks that every in-app path a step names is a page that exists, and that every button or heading
+a step puts in “quotes” is written on a screen.
 
 ### What is never stored
 
@@ -185,6 +186,9 @@ To add a course for a new action, add a `case` to `followUp` (success) or a clas
 
 The last rule exists because people type their password into the email box, and a password can be shaped exactly like
 an address. The only safe test is whether the staff table already knows the address.
+
+One address is stored in full: the login of the member of staff who acted, in `actor`, and of the account acted on, in
+`target`. The log exists to say who did what.
 
 Error text is scrubbed of tokens, addresses and phone numbers before it is stored.
 
