@@ -1290,3 +1290,16 @@ a.order-card:hover { border-color: var(--line-strong); transform: translateY(-1p
 
 /* Used by the diagnostics panel since PR #23 and never defined. */
 .input-sm { padding: 8px 11px; font-size: 0.82rem; border-radius: 10px; }
+
+/* Cultural presentation is scoped to the public site; staff portals keep their
+   operational layout. Photos are decorative and never replace menu imagery. */
+.cultural-site { min-height: 100vh; background: linear-gradient(rgba(10,9,8,.94), rgba(10,9,8,.98)), var(--cultural-image) center top / cover fixed; }
+.cultural-site[data-cultural-theme="royal"] { --accent: #f3c474; --accent-soft: rgba(243,196,116,.14); }
+.cultural-site[data-cultural-theme="lahore"] { --accent: #e6bd70; --accent-soft: rgba(230,189,112,.14); }
+.cultural-site[data-cultural-theme="heritage"] { --accent: #f1b079; --accent-soft: rgba(241,176,121,.14); }
+.cultural-banner { display:flex; align-items:center; justify-content:center; gap: 1rem; flex-wrap:wrap; padding: 8px 20px; background:#35251b; color:#fff3d9; font-size:.8rem; text-align:center; }
+.cultural-banner label { display:flex; align-items:center; gap:.4rem; }
+.cultural-banner select { background:#211914; border:1px solid #90734e; border-radius:6px; padding:3px 6px; }
+.cultural-site .hero-visual .frame { animation: cultural-float 7s ease-in-out infinite; }
+@keyframes cultural-float { 50% { transform: translateY(-8px); } }
+@media (prefers-reduced-motion: reduce) { .cultural-site .hero-visual .frame { animation: none; } }

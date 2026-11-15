@@ -6,6 +6,7 @@ import type { CustomerSession } from "@/lib/auth/customer";
 import { SiteHeader } from "./SiteHeader";
 import { SiteFooter } from "./SiteFooter";
 import { MusicPlayer } from "./MusicPlayer";
+import { CulturalTheme } from "./CulturalTheme";
 
 const PORTAL_PREFIXES = ["/staff", "/admin", "/counter", "/kitchen", "/delivery"];
 
@@ -28,11 +29,11 @@ export function SiteChrome({
   if (isPortal) return <>{children}</>;
 
   return (
-    <>
+    <CulturalTheme name={restaurant.name}>
       <SiteHeader customer={customer} />
       <main id="main">{children}</main>
       <SiteFooter restaurant={restaurant} build={build} />
       <MusicPlayer />
-    </>
+    </CulturalTheme>
   );
 }
