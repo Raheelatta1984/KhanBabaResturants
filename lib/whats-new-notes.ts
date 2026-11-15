@@ -65,5 +65,15 @@ export const RELEASE_NOTES: BundledReleaseNote[] = [
       "category": "portal",
       "version": "3.7.0"
     }
+  },
+  {
+    "prNumber": 27,
+    "note": {
+      "title": "Cultural themes and a new menu guide",
+      "summary": "Explore a rotating cultural theme and find dishes using dietary, spice and category preferences.",
+      "body": "The public site now offers a royal lounge and South Asian cultural themes, with a weekday rotation and selected fixed-date national occasions in Sydney time. You can also select a theme yourself. The menu guide matches published, available dishes to your preferences and links to the existing ordering flow. It is a simple guide, not an AI chat; contact the restaurant directly for allergy advice or staff assistance.",
+      "category": "feature",
+      "version": "3.7.1"
+    }
   }
 ];
