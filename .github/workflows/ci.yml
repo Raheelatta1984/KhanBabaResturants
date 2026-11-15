@@ -21,6 +21,11 @@ jobs:
         run: |
           npm run schema:build
           git diff --exit-code lib/db/schema.ts
+      # A PR that ships without a release note leaves the "What's new" page
+      # silently stale — that happened to PRs 20, 21 and 22. The note is a file
+      # in whats-new/ so it travels with the code it describes.
+      - name: Every release note is valid
+        run: npm run whatsnew:check
       - name: Typecheck
         run: npm run typecheck
       # The full data layer runs against PGlite (Postgres compiled to WASM), so

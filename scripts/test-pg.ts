@@ -2509,6 +2509,76 @@ async function main() {
     courierSettings.restaurant_address,
   );
 
+  // -------------------------------------------------------------------------
+  // Release notes ship with the deploy
+  // -------------------------------------------------------------------------
+  section("Release notes");
+
+  const { releaseNotesFromDisk, publishReleaseNotes } = await import("../lib/whats-new");
+
+  const onDisk = await releaseNotesFromDisk();
+  check("the repository carries release notes", onDisk.length >= 3, onDisk.length);
+  check(
+    "every note has a title and a summary",
+    onDisk.every((entry) => entry.note.title.length > 5 && entry.note.summary.length > 10),
+  );
+  check(
+    "every note names a PR number",
+    onDisk.every((entry) => Number.isInteger(entry.prNumber) && entry.prNumber > 0),
+  );
+  check(
+    "summaries stay short enough to fit the feed",
+    onDisk.every((entry) => entry.note.summary.length <= 320),
+    onDisk.map((entry) => entry.note.summary.length),
+  );
+  check(
+    "versions look like semver",
+    onDisk.every((entry) => !entry.note.version || /^\d+\.\d+\.\d+$/.test(entry.note.version)),
+  );
+
+  // The real regression: PRs 20, 21 and 22 shipped with no note, so the feed
+  // stopped at #19 while the code kept moving.
+  const feedPrs = await db.query<{ pr_number: number }>(
+    "SELECT pr_number FROM whats_new WHERE pr_number IS NOT NULL",
+  );
+  const seenPrs = new Set(feedPrs.map((row) => Number(row.pr_number)));
+  const missing = onDisk.map((entry) => entry.prNumber).filter((pr) => !seenPrs.has(pr));
+  check("every note on disk reached the feed", missing.length === 0, missing);
+
+  const latest = await db.maybeOne<{ pr_number: number }>(
+    "SELECT pr_number FROM whats_new WHERE pr_number IS NOT NULL ORDER BY pr_number DESC LIMIT 1",
+  );
+  check("the newest release in the feed is the newest PR", Number(latest?.pr_number) >= 22, latest?.pr_number);
+
+  // Publishing must be idempotent, or every cold start duplicates the feed.
+  const again = await publishReleaseNotes(db);
+  check("publishing twice writes nothing the second time", again === 0, again);
+  const countAfter = Number(
+    (await db.one<{ c: number }>("SELECT COUNT(*) AS c FROM whats_new WHERE pr_number IN (20,21,22)")).c,
+  );
+  check("the three backfilled notes exist exactly once each", countAfter === 3, countAfter);
+
+  // Version numbers must move forward; a feed that goes 3.2.1 -> 2.1.0 reads as
+  // a downgrade and undermines trust in the release history.
+  const versions = await db.query<{ pr_number: number; version: string | null }>(
+    "SELECT pr_number, version FROM whats_new WHERE pr_number BETWEEN 18 AND 22 ORDER BY pr_number",
+  );
+  const ordered = versions
+    .filter((row) => row.version)
+    .map((row) => row.version as string)
+    .map((value) => value.split(".").map(Number));
+  let monotonic = true;
+  for (let i = 1; i < ordered.length; i += 1) {
+    const [aMajor, aMinor, aPatch] = ordered[i - 1];
+    const [bMajor, bMinor, bPatch] = ordered[i];
+    const grows =
+      bMajor > aMajor ||
+      (bMajor === aMajor && bMinor > aMinor) ||
+      (bMajor === aMajor && bMinor === aMinor && bPatch >= aPatch);
+    if (!grows) monotonic = false;
+  }
+  check("release versions never go backwards", monotonic, versions);
+
   await harness.close();
 
   console.log(`\n${passed} checks passed, ${failures.length} failed`);
