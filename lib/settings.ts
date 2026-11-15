@@ -1,3 +1,4 @@
+import { cache as reactCache } from "react";
 import { getDb, type Db } from "./db";
 
 /** The exact automatic Facebook comment requested for the first claim. */
@@ -203,13 +204,41 @@ export const DEFAULT_SETTINGS: Record<string, string> = {
 };
 
 /**
- * Number of database round trips matters on a serverless platform, so a request
- * caches the whole settings table once and reads from memory after that.
+ * Number of database round trips matters on a serverless platform, so the whole
+ * settings table is read once and reused — but only briefly.
  *
- * `getSettingsCached()` is the request-scoped accessor used by the UI; the
- * `getSetting(key)` helpers fall back to a query whenever nothing was loaded.
+ * It used to be reused for as long as the process lived, and dropped only by a
+ * write made in the same process. On a serverless host that is not one
+ * process: the function that saves a setting and the function that renders the
+ * page showing it are separate, each with its own copy. The save cleared one
+ * copy; the page kept serving the other until its instance was recycled. A
+ * change made in the portal could appear not to have been made.
+ *
+ * Now:
+ *   - a page render reads the table once per request, always from the
+ *     database, so the screen you return to after saving shows what you saved;
+ *   - everything else (API handlers, webhooks, scripts) may reuse a copy for
+ *     at most SETTINGS_TTL_MS, and a write in the same process drops it at once.
  */
-const cache = new WeakMap<Db, Record<string, string>>();
+export const SETTINGS_TTL_MS = 2000;
+
+type CacheEntry = { at: number; values: Promise<Record<string, string>> };
+const cache = new WeakMap<Db, CacheEntry>();
+
+/**
+ * One object per React server render; a new throwaway object on every call
+ * anywhere else. That difference is how a render is recognised.
+ */
+const requestScope = reactCache((): { settings?: Promise<Record<string, string>> } => ({}));
+
+async function loadSettings(db: Db): Promise<Record<string, string>> {
+  const rows = await db.query<{ key: string; value: string }>(
+    "SELECT key, value FROM settings",
+  );
+  const out: Record<string, string> = { ...DEFAULT_SETTINGS };
+  for (const row of rows) out[row.key] = row.value;
+  return out;
+}
 
 export async function getSetting(key: string, fallback = ""): Promise<string> {
   const db = await getDb();
@@ -248,15 +277,24 @@ export const BRAND_SETTINGS: Record<string, string> = {
 
 export async function getSettings(): Promise<Record<string, string>> {
   const db = await getDb();
-  const cached = cache.get(db);
-  if (cached) return cached;
-  const rows = await db.query<{ key: string; value: string }>(
-    "SELECT key, value FROM settings",
-  );
-  const out: Record<string, string> = { ...DEFAULT_SETTINGS };
-  for (const row of rows) out[row.key] = row.value;
-  cache.set(db, out);
-  return out;
+
+  // Rendering a page: once per request, never from an earlier request.
+  const scope = requestScope();
+  if (scope === requestScope()) {
+    scope.settings ??= loadSettings(db);
+    return scope.settings;
+  }
+
+  const entry = cache.get(db);
+  if (entry && Date.now() - entry.at < SETTINGS_TTL_MS) return entry.values;
+
+  const values = loadSettings(db);
+  cache.set(db, { at: Date.now(), values });
+  // A failed read must not be served again as if it were the settings.
+  values.catch(() => {
+    if (cache.get(db)?.values === values) cache.delete(db);
+  });
+  return values;
 }
 
 /** Read a setting from an already-loaded settings object (no query). */

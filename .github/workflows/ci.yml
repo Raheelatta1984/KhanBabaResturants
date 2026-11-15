@@ -26,6 +26,13 @@ jobs:
       # in whats-new/ so it travels with the code it describes.
       - name: Every release note is valid
         run: npm run whatsnew:check
+      # The server does not read whats-new/ — it imports a module generated from
+      # it. A note that was added without regenerating would be in the folder
+      # and not in the build.
+      - name: Compiled release notes are in sync
+        run: |
+          npm run notes:build
+          git diff --exit-code lib/whats-new-notes.ts
       - name: Typecheck
         run: npm run typecheck
       # The full data layer runs against PGlite (Postgres compiled to WASM), so
@@ -37,8 +44,14 @@ jobs:
         run: npm run build
       # The production server boots against in-process PGlite too, so the smoke
       # test exercises real pages reading a real Postgres engine.
+      #
+      # whats-new/ is moved away first. On Vercel that folder is not packaged
+      # with the functions, and a server that still needed it at runtime passed
+      # here — from the checkout, where it exists — while publishing nothing in
+      # production. The smoke test asserts the newest note is on the page.
       - name: Smoke test the running server
         run: |
+          mv whats-new "$RUNNER_TEMP/whats-new"
           DATABASE_URL=postgres://pglite/khanbaba npm run start &
           for i in $(seq 1 60); do
             if curl -sf http://localhost:3000/api/health > /dev/null; then break; fi

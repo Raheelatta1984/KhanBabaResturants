@@ -8,6 +8,7 @@ import {
   homeForRole,
   type Role,
 } from "@/lib/auth/core";
+import { withActionLog } from "@/lib/ops/actions";
 
 export const dynamic = "force-dynamic";
 
@@ -30,7 +31,7 @@ function recordFailure(key: string) {
   }
 }
 
-export async function POST(request: Request) {
+async function post(request: Request) {
   let body: { email?: string; password?: string };
   try {
     body = (await request.json()) as { email?: string; password?: string };
@@ -105,3 +106,6 @@ export async function POST(request: Request) {
   attempts.delete(key);
   return response;
 }
+
+/** Every call is written to the action log: who, what, the outcome, what to do next. */
+export const POST = withActionLog("auth", post, { fallback: "login" });

@@ -6,6 +6,7 @@ import { money } from "@/lib/money";
 import { formatDateTime } from "@/lib/time";
 import { StatusBadge } from "@/components/ui";
 import { Icon } from "@/components/Icon";
+import { buildLabel } from "@/lib/build";
 
 export const dynamic = "force-dynamic";
 
@@ -90,7 +91,7 @@ export default async function CounterCustomersPage({
 
   return (
     <div className="portal">
-      <PortalNav name={session.name} role={session.role} />
+      <PortalNav name={session.name} role={session.role} build={buildLabel()} />
       <main className="container portal-main">
         <div className="page-head">
           <div>

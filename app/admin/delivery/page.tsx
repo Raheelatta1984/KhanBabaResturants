@@ -105,13 +105,15 @@ export default async function DeliverySettingsPage() {
       </div>
 
       <div className="notice" style={{ marginBottom: 18 }}>
-        Quoting from{" "}
-        <b>{partners.length ? partners.map(providerLabel).join(" · ") : "the sandbox courier"}</b>{" "}
-        using the <b>{settings.delivery_quote_strategy}</b> strategy. The Square
-        POS bridge, driver network and community settings live under{" "}
-        <a href="/admin/integrations" style={{ color: "var(--accent)" }}>Integrations</a>,{" "}
-        <a href="/admin/drivers" style={{ color: "var(--accent)" }}>Driver management</a> and{" "}
-        <a href="/admin/community" style={{ color: "var(--accent)" }}>Returns &amp; community</a>.
+        <span>
+          Quoting from{" "}
+          <b>{partners.length ? partners.map(providerLabel).join(" · ") : "the sandbox courier"}</b>{" "}
+          using the <b>{settings.delivery_quote_strategy}</b> strategy. The Square
+          POS bridge, driver network and community settings live under{" "}
+          <a href="/admin/integrations" style={{ color: "var(--accent)" }}>Integrations</a>,{" "}
+          <a href="/admin/drivers" style={{ color: "var(--accent)" }}>Driver management</a> and{" "}
+          <a href="/admin/community" style={{ color: "var(--accent)" }}>Returns &amp; community</a>.
+        </span>
       </div>
 
       <SettingsForm
@@ -353,13 +355,15 @@ export default async function DeliverySettingsPage() {
       </section>
 
       <div className="notice" style={{ marginTop: 18 }}>
-        Webhooks: <code>/api/webhooks/uber</code>,{" "}
-        <code>/api/webhooks/doordash</code> (courier status),{" "}
-        <code>/api/webhooks/stripe</code>,{" "}
-        <code>/api/webhooks/paypal</code> (payment confirmation),{" "}
-        <code>/api/webhooks/square</code> (POS) and{" "}
-        <code>/api/webhooks/facebook</code> (community comments). Signed
-        requests are required whenever a secret is configured.
+        <span>
+          Webhooks: <code>/api/webhooks/uber</code>,{" "}
+          <code>/api/webhooks/doordash</code> (courier status),{" "}
+          <code>/api/webhooks/stripe</code>,{" "}
+          <code>/api/webhooks/paypal</code> (payment confirmation),{" "}
+          <code>/api/webhooks/square</code> (POS) and{" "}
+          <code>/api/webhooks/facebook</code> (community comments). Signed
+          requests are required whenever a secret is configured.
+        </span>
       </div>
     </>
   );

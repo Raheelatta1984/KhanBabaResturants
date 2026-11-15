@@ -23,6 +23,11 @@
  * production through the same deploy as the code it describes — no manual step,
  * no chance of the two drifting apart.
  *
+ * The server does not read this folder at runtime: it is not packaged with the
+ * functions on Vercel. `scripts/generate-release-notes.mjs` compiles it into
+ * `lib/whats-new-notes.ts` before every build; after adding a note, run
+ * `npm run notes:build` and commit that file too.
+ *
  * Usage:
  *   node scripts/check-whats-new.mjs --pr 23     exit 1 if that note is missing
  *   node scripts/check-whats-new.mjs --all       validate every file in the dir

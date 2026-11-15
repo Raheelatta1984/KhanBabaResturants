@@ -6,6 +6,9 @@ import { catalogStats } from "@/lib/whatsapp/catalog";
 import { feedbackStats } from "@/lib/feedback";
 import { getNowPlaying } from "@/lib/music";
 import { money } from "@/lib/money";
+import { ADMIN_NAV } from "@/lib/nav";
+import { ensureFreshAudit, logSummary } from "@/lib/ops/log";
+import { buildLabel } from "@/lib/build";
 import { Icon } from "@/components/Icon";
 import { AutoRefresh } from "@/components/portal/AutoRefresh";
 import { StatusBadge } from "@/components/ui";
@@ -14,15 +17,7 @@ export const dynamic = "force-dynamic";
 
 export const metadata = { title: "Command centre" };
 
-type Tile = {
-  href: string;
-  label: string;
-  blurb: string;
-  icon: string;
-  badge?: string;
-};
-
-type Group = { title: string; note: string; tiles: Tile[] };
+type Badge = { label: string; status: string };
 
 /**
  * The administrator's main page — what the Khan Baba logo opens.
@@ -30,15 +25,22 @@ type Group = { title: string; note: string; tiles: Tile[] };
  * Staff portals open their own queue; the administrator opens this, with every
  * option the role can use in one place and the live numbers that matter at the
  * top. No sidebar hunting, no memorised URLs.
+ *
+ * The tiles are the same list the sidebar draws (lib/nav.ts), so a page cannot
+ * be reachable from one and missing from the other — which is how Marketing
+ * and the operational log came to be absent from the page that promises
+ * "every option".
  */
 export default async function AdminHubPage() {
   const session = await requireRole(["admin", "manager"]);
   const db = await getDb();
-  const [stats, catalog, feedback, now] = await Promise.all([
+  await ensureFreshAudit(db);
+  const [stats, catalog, feedback, now, findings] = await Promise.all([
     orderStats(db),
     catalogStats(db),
     feedbackStats(db),
     getNowPlaying(db),
+    logSummary(db),
   ]);
   const [whatsappOrders, pendingRequests, tablesDue] = await Promise.all([
     db.one<{ c: number }>(
@@ -52,137 +54,28 @@ export default async function AdminHubPage() {
     ),
   ]);
 
-  const groups: Group[] = [
-    {
-      title: "Service floor",
-      note: "The queues that keep the room moving.",
-      tiles: [
-        {
-          href: "/counter",
-          label: "Counter",
-          blurb: "Accept orders, take payment, park table bills, send payment links.",
-          icon: "shield",
-          badge: stats.pending > 0 ? `${stats.pending} to accept` : undefined,
-        },
-        {
-          href: "/kitchen",
-          label: "Kitchen display",
-          blurb: "The queue, on the fire and packed columns with per-item ticking.",
-          icon: "flame",
-          badge: stats.kitchen > 0 ? `${stats.kitchen} cooking` : undefined,
-        },
-        {
-          href: "/delivery",
-          label: "Delivery desk",
-          blurb: "Re-quote, dispatch and track every courier partner.",
-          icon: "truck",
-        },
-        {
-          href: "/admin/orders",
-          label: "Orders",
-          blurb: "Every ticket with source, payment state and full event log.",
-          icon: "bag",
-        },
-        {
-          href: "/admin/tables",
-          label: "Tables & QR codes",
-          blurb: "Table ordering links for the room, printable QR posters.",
-          icon: "table",
-        },
-        {
-          href: "/counter/customers",
-          label: "Customers",
-          blurb: "Look a guest up by name, email or mobile — including guests.",
-          icon: "user",
-        },
-      ],
-    },
-    {
-      title: "WhatsApp & publishing",
-      note: "One menu, centrally published; stock told once, everywhere.",
-      tiles: [
-        {
-          href: "/admin/whatsapp",
-          label: "WhatsApp Business",
-          blurb: "Publish the catalogue, work conversations, take orders in the chat.",
-          icon: "phone",
-          badge: whatsappOrders.c > 0 ? `${whatsappOrders.c} today` : undefined,
-        },
-        {
-          href: "/admin/menu",
-          label: "Menu & dishes",
-          blurb: "The single source of truth for prices, photos and availability.",
-          icon: "box",
-          badge: catalog.errors > 0 ? `${catalog.errors} sync error(s)` : undefined,
-        },
-        {
-          href: "/admin/reviews",
-          label: "Dish reviews",
-          blurb: "Moderate guest reviews on individual dishes.",
-          icon: "star",
-        },
-        {
-          href: "/admin/feedback",
-          label: "Feedback & Google",
-          blurb: "Turn table feedback into Google review drafts with photos.",
-          icon: "sparkle",
-          badge: feedback.drafts > 0 ? `${feedback.drafts} draft(s)` : undefined,
-        },
-        {
-          href: "/admin/whats-new",
-          label: "What's new",
-          blurb: "Publish a release note on the customer site.",
-          icon: "layers",
-        },
-      ],
-    },
-    {
-      title: "Lahore room",
-      note: "Music, recitation sets and the cultural theme.",
-      tiles: [
-        {
-          href: "/admin/music",
-          label: "Music system",
-          blurb: "Library, collections, schedules, live controls and charging rules.",
-          icon: "play",
-          badge: pendingRequests.c > 0 ? `${pendingRequests.c} request(s)` : undefined,
-        },
-        {
-          href: "/counter/music",
-          label: "Counter music desk",
-          blurb: "Front-of-house controls: stop, resume, replay, approve requests.",
-          icon: "gear",
-        },
-        {
-          href: "/music",
-          label: "Guest music page",
-          blurb: "What is playing, the collections and the song-request form.",
-          icon: "eye",
-          badge: now.isReligious ? "recitation live" : undefined,
-        },
-      ],
-    },
-    {
-      title: "Commercial",
-      note: "Money rules, partners and promotions.",
-      tiles: [
-        { href: "/admin/pricing", label: "Pricing & holidays", blurb: "Surcharges, priority fees and the holiday calendar.", icon: "chart" },
-        { href: "/admin/promotions", label: "Promotions", blurb: "Customer codes and driver rewards, with caps.", icon: "sparkle" },
-        { href: "/admin/delivery", label: "Delivery & payments", blurb: "Partners, markup, Stripe and PayPal credentials.", icon: "truck" },
-        { href: "/admin/integrations", label: "Integrations", blurb: "The detached Square POS bridge and partner status.", icon: "layers" },
-        { href: "/admin/drivers", label: "Driver management", blurb: "Verification, assignment, commission and ATO exports.", icon: "bike" },
-        { href: "/admin/community", label: "Returns & community", blurb: "Untouched returns offered to neighbours in need.", icon: "bag" },
-      ],
-    },
-    {
-      title: "Production & people",
-      note: "Cost, stock and who can do what.",
-      tiles: [
-        { href: "/admin/production", label: "Production & costing", blurb: "Materials, recipes, batches and cost postings.", icon: "box" },
-        { href: "/admin/staff", label: "Users & access", blurb: "Staff roles, customer logins, go-live checklist.", icon: "user" },
-      ],
-    },
-  ];
+  const urgent = findings.critical + findings.error;
+  const badge = (when: boolean, label: string, status = "pending"): Badge | undefined =>
+    when ? { label, status } : undefined;
+
+  /** Live numbers, keyed by the link they belong to. */
+  const badges: Record<string, Badge | undefined> = {
+    "/counter": badge(stats.pending > 0, `${stats.pending} to accept`),
+    "/kitchen": badge(stats.kitchen > 0, `${stats.kitchen} cooking`),
+    "/admin/logs": badge(findings.open > 0, `${findings.open} open`, urgent > 0 ? "cancelled" : "pending"),
+    "/admin/whatsapp": badge(whatsappOrders.c > 0, `${whatsappOrders.c} today`),
+    "/admin/menu": badge(catalog.errors > 0, `${catalog.errors} sync error(s)`),
+    "/admin/feedback": badge(feedback.drafts > 0, `${feedback.drafts} draft(s)`),
+    "/admin/music": badge(pendingRequests.c > 0, `${pendingRequests.c} request(s)`),
+    "/music": badge(now.isReligious, "recitation live"),
+    "/admin/whats-new": { label: buildLabel(), status: "completed" },
+  };
+
+  // This page is the hub, so it does not offer a tile to itself.
+  const groups = ADMIN_NAV.map((group) => ({
+    ...group,
+    links: group.links.filter((link) => link.href !== "/admin/hub"),
+  }));
 
   return (
     <>
@@ -197,6 +90,9 @@ export default async function AdminHubPage() {
             Every option this role can use, in one place. The logo always brings an administrator
             back here; everyone else lands on their own queue.
           </p>
+          <p className="build-stamp" style={{ marginTop: 10 }}>
+            Running {buildLabel()} · <Link href="/admin/whats-new" style={{ textDecoration: "underline" }}>what changed</Link>
+          </p>
         </div>
         <div className="hub-stats">
           <div><span>Today</span><b>{money(stats.today.revenue)}</b><small>{stats.today.orders} orders</small></div>
@@ -206,6 +102,23 @@ export default async function AdminHubPage() {
         </div>
       </div>
 
+      {findings.open > 0 ? (
+        <Link
+          href="/admin/logs"
+          className={urgent > 0 ? "notice notice-red" : "notice"}
+          style={{ marginBottom: 12 }}
+        >
+          <span>
+            <strong>
+              {findings.open} open finding{findings.open === 1 ? "" : "s"}
+            </strong>{" "}
+            in the operational log
+            {urgent > 0 ? ` — ${urgent} need attention now` : ""}. Each has a reference and the steps to clear it.{" "}
+            <u>Open the log</u>
+          </span>
+        </Link>
+      ) : null}
+
       <div className="notice" style={{ marginBottom: 18 }}>
         <span>
           <strong>Payment rule:</strong> dine-in and table orders are settled at the counter after the
@@ -214,24 +127,27 @@ export default async function AdminHubPage() {
       </div>
 
       {groups.map((group) => (
-        <section key={group.title} className="hub-group">
+        <section key={group.id} className="hub-group" id={`hub-${group.id}`}>
           <div className="hub-group-head">
             <h2>{group.title}</h2>
             <span className="tiny muted">{group.note}</span>
           </div>
           <div className="hub-grid">
-            {group.tiles.map((tile) => (
-              <Link key={tile.href} href={tile.href} className="hub-tile">
-                <span className="hub-icon">
-                  <Icon name={tile.icon} size={20} />
-                </span>
-                <span className="hub-tile-body">
-                  <b>{tile.label}</b>
-                  <span className="tiny muted">{tile.blurb}</span>
-                </span>
-                {tile.badge ? <StatusBadge status="pending" label={tile.badge} /> : <Icon name="arrow" size={15} />}
-              </Link>
-            ))}
+            {group.links.map((tile) => {
+              const live = badges[tile.href];
+              return (
+                <Link key={tile.href} href={tile.href} className="hub-tile">
+                  <span className="hub-icon">
+                    <Icon name={tile.icon} size={20} />
+                  </span>
+                  <span className="hub-tile-body">
+                    <b>{tile.label}</b>
+                    <span className="tiny muted">{tile.blurb}</span>
+                  </span>
+                  {live ? <StatusBadge status={live.status} label={live.label} /> : <Icon name="arrow" size={15} />}
+                </Link>
+              );
+            })}
           </div>
         </section>
       ))}

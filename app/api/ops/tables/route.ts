@@ -1,10 +1,11 @@
 import { NextResponse } from "next/server";
 import { getDb } from "@/lib/db";
 import { getApiSession } from "@/lib/auth/api";
+import { withActionLog } from "@/lib/ops/actions";
 
 export const dynamic = "force-dynamic";
 
-export async function POST(request: Request) {
+async function post(request: Request) {
   const session = await getApiSession(["admin", "manager"]);
   if (!session)
     return NextResponse.json({ error: "Not authorised" }, { status: 401 });
@@ -80,3 +81,6 @@ export async function POST(request: Request) {
 
   return NextResponse.json({ error: "Unknown action" }, { status: 400 });
 }
+
+/** Every call is written to the action log: who, what, the outcome, what to do next. */
+export const POST = withActionLog("tables", post);

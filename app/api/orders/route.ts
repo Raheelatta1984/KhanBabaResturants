@@ -6,6 +6,7 @@ import { publicBaseUrl } from "@/lib/url";
 import type { Channel } from "@/lib/pricing";
 import { isPaymentOption } from "@/lib/payments";
 import { triggerTableEncouragement } from "@/lib/music";
+import { withActionLog } from "@/lib/ops/actions";
 
 export const dynamic = "force-dynamic";
 
@@ -31,7 +32,7 @@ type Body = {
   items?: (CartLineInput & { spiceLevel?: string })[];
 };
 
-export async function POST(request: Request) {
+async function post(request: Request) {
   let body: Body;
   try {
     body = (await request.json()) as Body;
@@ -131,3 +132,6 @@ export async function POST(request: Request) {
     );
   }
 }
+
+/** Every call is written to the action log: who, what, the outcome, what to do next. */
+export const POST = withActionLog("orders", post, { fallback: "place", anonymous: "customer" });

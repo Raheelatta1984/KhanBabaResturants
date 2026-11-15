@@ -6,6 +6,7 @@ import { CartProvider } from "@/components/CartProvider";
 import { SiteChrome } from "@/components/SiteChrome";
 import { BRAND_SETTINGS } from "@/lib/settings";
 import { getCustomerSession } from "@/lib/auth/customer";
+import { buildLabel } from "@/lib/build";
 
 export const metadata: Metadata = {
   title: {
@@ -56,7 +57,7 @@ export default async function RootLayout({
           Skip to content
         </a>
         <CartProvider>
-          <SiteChrome restaurant={restaurant} customer={customer}>
+          <SiteChrome restaurant={restaurant} customer={customer} build={buildLabel()}>
             {children}
           </SiteChrome>
         </CartProvider>

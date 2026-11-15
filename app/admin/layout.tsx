@@ -3,6 +3,7 @@ import { PortalNav } from "@/components/portal/PortalNav";
 import { AdminSide } from "@/components/portal/AdminSide";
 import { describeDatabaseTarget } from "@/lib/db";
 import { mediaConfig } from "@/lib/media";
+import { buildLabel } from "@/lib/build";
 
 export const dynamic = "force-dynamic";
 
@@ -17,7 +18,7 @@ export default async function AdminLayout({
 
   return (
     <div className="portal">
-      <PortalNav name={session.name} role={session.role} />
+      <PortalNav name={session.name} role={session.role} build={buildLabel()} />
       <main className="container portal-main">
         {onDiskOnly ? (
           <div className="notice" style={{ marginBottom: 18 }}>
@@ -35,8 +36,8 @@ export default async function AdminLayout({
           </div>
         ) : null}
         <div className="admin-grid">
-          <AdminSide />
-          <div>{children}</div>
+          <AdminSide build={buildLabel()} />
+          <div className="admin-content">{children}</div>
         </div>
       </main>
     </div>

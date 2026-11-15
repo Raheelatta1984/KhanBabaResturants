@@ -26,6 +26,7 @@ import {
   ensurePlayer,
   getNowPlaying,
 } from "@/lib/music";
+import { withActionLog } from "@/lib/ops/actions";
 
 export const dynamic = "force-dynamic";
 
@@ -36,7 +37,7 @@ type Body = Record<string, unknown> & { action?: string };
  * Every action is available to counter staff: the brief asks them to be able to
  * stop, resume, replay and load songs, not just the administrator.
  */
-export async function POST(request: Request) {
+async function post(request: Request) {
   const session = await getApiSession(["admin", "manager", "counter"]);
   if (!session) return NextResponse.json({ error: "Not authorised" }, { status: 401 });
 
@@ -200,3 +201,24 @@ export async function POST(request: Request) {
     );
   }
 }
+
+/**
+ * Transport controls — play, pause, next, volume — fire all through service
+ * and decide nothing, so they are logged only when they fail. Changes to the
+ * library, the schedule and the request queue are always logged.
+ */
+const MUSIC_TRANSPORT = [
+  "player",
+  "auto",
+  "next",
+  "play",
+  "pause",
+  "resume",
+  "replay",
+  "stop",
+  "volume",
+  "clear-encouragement",
+];
+
+/** Every call is written to the action log: who, what, the outcome, what to do next. */
+export const POST = withActionLog("music", post, { quiet: MUSIC_TRANSPORT });

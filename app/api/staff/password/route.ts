@@ -3,11 +3,12 @@ import { getDb } from "@/lib/db";
 import { getApiSession } from "@/lib/auth/api";
 import { refreshStaffCookie } from "@/lib/auth/staff-cookie";
 import { UserAdminError, changeOwnPassword } from "@/lib/auth/users";
+import { withActionLog } from "@/lib/ops/actions";
 
 export const dynamic = "force-dynamic";
 
 /** POST /api/staff/password — any signed-in staff member changes their own password. */
-export async function POST(request: Request) {
+async function post(request: Request) {
   const session = await getApiSession();
   if (!session)
     return NextResponse.json({ error: "Not authorised" }, { status: 401 });
@@ -39,3 +40,6 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "Could not save" }, { status: 500 });
   }
 }
+
+/** Every call is written to the action log: who, what, the outcome, what to do next. */
+export const POST = withActionLog("auth", post, { fallback: "change-password" });

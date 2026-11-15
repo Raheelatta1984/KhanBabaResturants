@@ -76,9 +76,17 @@ export function canAccess(role: Role, pathname: string): boolean {
   return roles.includes(role);
 }
 
+/**
+ * The top bar: the portals, plus the two places an administrator was sent
+ * looking for. It is drawn on every staff screen, so Marketing and the log are
+ * one click from the counter and the kitchen too — not only from an admin page,
+ * which is the only place the sidebar exists.
+ */
 export const PORTAL_LINKS: { href: string; label: string; roles: Role[] }[] = [
   { href: "/counter", label: "Counter", roles: ["admin", "manager", "counter"] },
   { href: "/kitchen", label: "Kitchen", roles: ["admin", "manager", "kitchen"] },
   { href: "/delivery", label: "Delivery", roles: ["admin", "manager", "delivery"] },
   { href: "/admin", label: "Admin", roles: ["admin", "manager"] },
+  { href: "/admin/marketing", label: "Marketing", roles: ["admin", "manager"] },
+  { href: "/admin/logs", label: "Logs", roles: ["admin", "manager"] },
 ];
