@@ -23,6 +23,7 @@ import {
   paidAwaitingAcceptance,
   tableBillsDue,
 } from "@/lib/dine-in";
+import { buildLabel } from "@/lib/build";
 
 export const dynamic = "force-dynamic";
 
@@ -60,7 +61,7 @@ export default async function CounterPage() {
 
   return (
     <div className="portal">
-      <PortalNav name={session.name} role={session.role} />
+      <PortalNav name={session.name} role={session.role} build={buildLabel()} />
       <AutoRefresh intervalMs={7000} />
       <main className="container portal-main">
         <div className="page-head">

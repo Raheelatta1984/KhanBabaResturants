@@ -3,8 +3,11 @@ import { Icon } from "./Icon";
 
 export function SiteFooter({
   restaurant,
+  build,
 }: {
   restaurant: { name: string; address: string; phone: string; email: string; hours: string };
+  /** "v3.7.0+abc1234". Shown so "is the new version live?" has an answer on the page itself. */
+  build?: string;
 }) {
   return (
     <footer className="site-footer" id="visit">
@@ -75,7 +78,17 @@ export function SiteFooter({
             © {new Date().getFullYear()} {restaurant.name}. All prices in AUD and include GST. Public holiday and
             weekend surcharges apply as displayed at checkout.
           </span>
-          <span>Built for direct ordering · no aggregator commission</span>
+          <span>
+            Built for direct ordering · no aggregator commission
+            {build ? (
+              <>
+                {" · "}
+                <Link href="/whats-new" className="build-stamp" title="The version of the site you are looking at. Click to see what changed.">
+                  {build}
+                </Link>
+              </>
+            ) : null}
+          </span>
         </div>
       </div>
     </footer>

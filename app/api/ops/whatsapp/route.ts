@@ -19,6 +19,7 @@ import {
 } from "@/lib/whatsapp/catalog";
 import { requestOrderPayment } from "@/lib/whatsapp/orders";
 import { sendFeedbackInvite } from "@/lib/feedback";
+import { withActionLog } from "@/lib/ops/actions";
 
 export const dynamic = "force-dynamic";
 
@@ -45,7 +46,7 @@ type Body = {
  * outside world can buy). Messaging and payment links are counter-level — the
  * person at the till is the one talking to the guest.
  */
-export async function POST(request: Request) {
+async function post(request: Request) {
   const session = await getApiSession(["admin", "manager", "counter"]);
   if (!session) return NextResponse.json({ error: "Not authorised" }, { status: 401 });
 
@@ -289,3 +290,6 @@ export async function POST(request: Request) {
     );
   }
 }
+
+/** Every call is written to the action log: who, what, the outcome, what to do next. */
+export const POST = withActionLog("whatsapp", post, { quiet: ["check", "chat-link", "open-thread"] });

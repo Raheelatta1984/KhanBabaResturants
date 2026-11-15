@@ -18,6 +18,7 @@ import {
   type CredentialProbe,
 } from "@/lib/whatsapp/client";
 import { zoneSummary } from "@/lib/delivery/zones";
+import { withActionLog } from "@/lib/ops/actions";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 30;
@@ -189,7 +190,7 @@ export async function GET(request: Request) {
  * Flip which source wins for the WhatsApp credentials. One setting, no secret
  * in the request: the values themselves stay in Vercel or in Supabase.
  */
-export async function POST(request: Request) {
+async function post(request: Request) {
   const session = await getApiSession(["admin", "manager"]);
   if (!session) {
     return NextResponse.json({ error: "Not authorised" }, { status: 401 });
@@ -354,3 +355,6 @@ function redactProbe(probe: CredentialProbe): CredentialProbe {
       : null,
   };
 }
+
+/** Every call is written to the action log: who, what, the outcome, what to do next. */
+export const POST = withActionLog("diagnostics", post);

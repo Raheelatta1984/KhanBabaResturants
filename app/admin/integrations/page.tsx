@@ -106,12 +106,14 @@ export default async function IntegrationsPage() {
           ))}
         </div>
         <div className="notice" style={{ marginTop: 14 }}>
-          Courier quote strategy: <b>{settings.delivery_quote_strategy}</b> across{" "}
-          {partners.length ? partners.map(providerLabel).join(", ") : "the sandbox courier"}.
-          Webhooks: <code>/api/webhooks/uber</code>, <code>/api/webhooks/doordash</code>,{" "}
-          <code>/api/webhooks/stripe</code>, <code>/api/webhooks/paypal</code>,{" "}
-          <code>/api/webhooks/square</code>, <code>/api/webhooks/facebook</code>,{" "}
-          <code>/api/webhooks/instagram</code>.
+          <span>
+            Courier quote strategy: <b>{settings.delivery_quote_strategy}</b> across{" "}
+            {partners.length ? partners.map(providerLabel).join(", ") : "the sandbox courier"}.
+            Webhooks: <code>/api/webhooks/uber</code>, <code>/api/webhooks/doordash</code>,{" "}
+            <code>/api/webhooks/stripe</code>, <code>/api/webhooks/paypal</code>,{" "}
+            <code>/api/webhooks/square</code>, <code>/api/webhooks/facebook</code>,{" "}
+            <code>/api/webhooks/instagram</code>.
+          </span>
         </div>
       </section>
 

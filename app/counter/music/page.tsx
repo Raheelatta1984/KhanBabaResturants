@@ -4,6 +4,7 @@ import { PortalNav } from "@/components/portal/PortalNav";
 import { AutoRefresh } from "@/components/portal/AutoRefresh";
 import { MusicStudio } from "@/components/portal/MusicStudio";
 import { Icon } from "@/components/Icon";
+import { buildLabel } from "@/lib/build";
 
 export const dynamic = "force-dynamic";
 
@@ -20,7 +21,7 @@ export default async function CounterMusicPage() {
 
   return (
     <div className="portal">
-      <PortalNav name={session.name} role={session.role} />
+      <PortalNav name={session.name} role={session.role} build={buildLabel()} />
       <AutoRefresh intervalMs={12000} />
       <main className="container portal-main">
         <div className="page-head">

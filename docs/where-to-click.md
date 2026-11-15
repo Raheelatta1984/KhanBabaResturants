@@ -34,15 +34,10 @@ You will get a table like this:
 - **None accepted** → every token is invalid. Generate a new System User token;
   the screen tells you this in those words rather than making you guess.
 
-**Sign-in details (demo accounts, still active):**
-
-| Email | Password |
-|---|---|
-| `admin@khanbaba.com.au` | `KhanBaba2026!` |
-| `manager@khanbaba.com.au` | `KhanBaba2026!` |
-
-> If the password is refused, an admin has since changed it in
-> Admin → Staff. Use your own login.
+**Sign in with your own staff login.** The demo logins that ship with the seed data share one password, and that
+password is printed in this repository's README, so it must not be in use on the live site. If it still is, the
+Operational log (`/admin/logs`) shows a critical finding, `SEC_DEMO_PASSWORD`, naming the accounts. To retire them all
+in one step: **Admin → Users & access → Go live**.
 
 The same screen has the other two switches:
 `Auto` / `Use Vercel env` / `Use admin portal`, and the two token-variable buttons.
@@ -130,12 +125,32 @@ overwritten the next time the command runs.
 
 ## Marketing and the operational log
 
-| I want to… | Click |
-|---|---|
-| Change how the restaurant talks on Instagram | **Marketing → Marketing & social** (`/admin/marketing`) |
-| Find out which WhatsApp token actually works | **Marketing → Integration diagnostics** |
-| See the next 7 days of posts | **Marketing → Content calendar** |
-| Know what is wrong and what to do about it | **Operational log** (`/admin/logs`) |
+Sign in at `https://khanbabaresturants.vercel.app/staff/login` as an administrator or manager. Both are then one
+click from every staff screen, in three places.
 
-The Marketing console had no sidebar link until v3.6.0 — the page existed at
-`/admin/marketing` but the only way in was typing the URL. That is fixed.
+| I want to… | Click | Address |
+|---|---|---|
+| Open the Marketing console | top bar **Marketing** · sidebar **Marketing → Marketing & social** · Command centre tile | `/admin/marketing` |
+| See the next 7 days of posts | sidebar **Marketing → Content calendar** | `/admin/marketing#content-calendar` |
+| Find out which WhatsApp token works | sidebar **Marketing → Integration diagnostics** | `/admin/marketing#integration-diagnostics` |
+| Enter Facebook and Instagram credentials | the **Credentials** button at the top of the Marketing page | `/admin/marketing#credentials` |
+| Know what is wrong and what to do about it | top bar **Logs** · sidebar **Operations → Operational log** | `/admin/logs` |
+| See what was done, by whom, and whether it worked | **Logs → Action log** | `/admin/logs?view=actions` |
+| See which version is running | the footer of any page, beside your name in the staff bar, or | `/api/health` |
+| See what changed in each version | sidebar **Catalogue → What's new** | `/admin/whats-new` |
+
+On a phone or a tablet the sidebar is behind the **Admin menu** button at the top of each admin page. The top bar
+links are always visible.
+
+### If a change does not appear
+
+1. Read the version in the footer, or open `/api/health` and read `build`. That is what the server is running.
+2. Compare it with the newest entry on `/whats-new`. If the page is behind the build, `/api/health` lists the missing
+   notes under `release.notesMissing` and the Operational log raises `REL_NOTES_UNPUBLISHED`.
+3. If the build itself is old, the deployment did not happen: check Vercel → Deployments for the commit.
+
+How this went wrong before, so it is recognisable if it happens again: the sidebar rendered its links as one run-on
+paragraph, Marketing and the log were missing from the top bar and the Command centre, two Marketing links pointed at
+sections that did not exist, release notes were read from a folder that is not present on the live server, and no
+screen said which version was running. `scripts/test-pg.ts` now fails if a page exists that the navigation does not
+link to, or if a link names a section its page does not have.

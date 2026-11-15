@@ -17,6 +17,7 @@ import { OpsButton } from "@/components/portal/OpsButton";
 import { StartBatchForm } from "@/components/portal/StartBatchForm";
 import { Icon } from "@/components/Icon";
 import { StatusBadge } from "@/components/ui";
+import { buildLabel } from "@/lib/build";
 
 export const dynamic = "force-dynamic";
 
@@ -236,7 +237,7 @@ export default async function KitchenPage({
 
   return (
     <div className="portal">
-      <PortalNav name={session.name} role={session.role} />
+      <PortalNav name={session.name} role={session.role} build={buildLabel()} />
       <AutoRefresh intervalMs={8000} />
       <main className="container portal-main">
         <div className="page-head">

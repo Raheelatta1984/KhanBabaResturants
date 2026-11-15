@@ -166,9 +166,70 @@ echo "Portals + admin console"
 for path in /counter /counter/customers /counter/music /kitchen /delivery /admin /admin/hub /admin/whatsapp \
             /admin/music /admin/feedback /admin/orders /admin/menu /admin/menu/new /admin/reviews \
             /admin/production /admin/pricing /admin/promotions /admin/drivers /admin/community \
-            /admin/integrations /admin/delivery /admin/tables /admin/staff /admin/whats-new; do
+            /admin/integrations /admin/delivery /admin/tables /admin/staff /admin/whats-new \
+            /admin/marketing /admin/logs; do
   check "$path" -b "$JAR"
 done
+
+# A page that renders but that nothing links to is, for the person using the
+# portal, a page that does not exist. That was the fault: Marketing and the
+# Operational log were built, returned 200 here, and could not be found.
+echo "Navigation: every menu reaches Marketing and the log"
+has() { # has <label> <haystack-file> <fixed string>
+  if grep -qF -- "$3" "$2"; then echo "  ok   $1"; else echo "  FAIL $1 (no: $3)"; fail=1; fi
+}
+NAV_PAGE="$(mktemp)"; HUB_PAGE="$(mktemp)"; MKT_PAGE="$(mktemp)"; COUNTER_PAGE="$(mktemp)"
+curl -s -b "$JAR" "$BASE/admin" -o "$NAV_PAGE"
+curl -s -b "$JAR" "$BASE/admin/hub" -o "$HUB_PAGE"
+curl -s -b "$JAR" "$BASE/admin/marketing" -o "$MKT_PAGE"
+curl -s -b "$JAR" "$BASE/counter" -o "$COUNTER_PAGE"
+for href in /admin/marketing /admin/logs /admin/whats-new /admin/hub \
+            '/admin/marketing#content-calendar' '/admin/marketing#integration-diagnostics'; do
+  has "the admin sidebar links to $href" "$NAV_PAGE" "href=\"$href\""
+done
+for href in /counter /kitchen /delivery /admin /admin/marketing /admin/logs; do
+  has "the staff top bar on /counter links to $href" "$COUNTER_PAGE" "href=\"$href\""
+done
+for href in /admin/marketing /admin/logs /admin/whats-new /admin/menu /admin/staff /admin/delivery; do
+  has "the Command centre has a tile for $href" "$HUB_PAGE" "href=\"$href\""
+done
+for id in platform-status todays-menu content content-calendar publish credentials integration-diagnostics; do
+  has "the Marketing page has the section #$id" "$MKT_PAGE" "id=\"$id\""
+done
+has "the Marketing page shows the seven-day calendar" "$MKT_PAGE" "Content calendar — the next seven days"
+
+# Which build is this? Before, no screen said — so "I still can't see the
+# changes" could not be told apart from "the changes are not deployed".
+echo "Build stamp"
+HEALTH=$(curl -s "$BASE/api/health")
+BUILD_LABEL=$(printf '%s' "$HEALTH" | sed -n 's/.*"build":"\([^"]*\)".*/\1/p')
+RELEASE_VERSION=$(printf '%s' "$HEALTH" | sed -n 's/.*"release":{"version":"\([^"]*\)".*/\1/p')
+if [ -n "$RELEASE_VERSION" ] && [ "${BUILD_LABEL#v$RELEASE_VERSION}" != "$BUILD_LABEL" ]; then
+  echo "  ok   /api/health names the build: $BUILD_LABEL"
+else
+  echo "  FAIL /api/health build is '$BUILD_LABEL' for release '$RELEASE_VERSION': $HEALTH"
+  fail=1
+fi
+# The check that would have caught the live fault: the newest entry on the
+# public feed must be the version this build says it is.
+if printf '%s' "$HEALTH" | grep -qF "\"latestPublished\":{\"version\":\"$RELEASE_VERSION\""; then
+  echo "  ok   the newest published release is this build's: $RELEASE_VERSION"
+else
+  echo "  FAIL the feed's newest release is not $RELEASE_VERSION: $HEALTH"
+  fail=1
+fi
+if printf '%s' "$HEALTH" | grep -q '"notesMissing":\[\]'; then
+  echo "  ok   /api/health reports every release note published"
+else
+  echo "  FAIL /api/health reports unpublished notes: $HEALTH"
+  fail=1
+fi
+curl -s "$BASE/" -o "$MKT_PAGE"
+has "the public footer shows the build" "$MKT_PAGE" "$BUILD_LABEL"
+has "the admin sidebar shows the build" "$NAV_PAGE" "$BUILD_LABEL"
+has "the staff top bar shows the build" "$COUNTER_PAGE" "$BUILD_LABEL"
+has "the Command centre shows the build" "$HUB_PAGE" "$BUILD_LABEL"
+rm -f "$NAV_PAGE" "$HUB_PAGE" "$MKT_PAGE" "$COUNTER_PAGE"
 
 # Walk the order the counter/kitchen staff would: accept → take payment → bump →
 # hand over, then run a production batch that posts material costs. This proves
@@ -393,7 +454,8 @@ expect() { # expect <label> <want> <got>
 
 echo "What's new feed"
 WN=$(curl -s "$BASE/whats-new")
-for phrase in "Whalan 2770" "7-day content calendar" "which WhatsApp token works"; do
+for phrase in "Whalan 2770" "7-day content calendar" "which WhatsApp token works" \
+              "A log that tells you what to do" "Changes now reach the screen"; do
   if printf '%s' "$WN" | grep -q "$phrase"; then
     echo "  ok   what's new lists: $phrase"
   else
@@ -401,7 +463,16 @@ for phrase in "Whalan 2770" "7-day content calendar" "which WhatsApp token works
     fail=1
   fi
 done
-HOME_NEW=$(curl -s "$BASE/" | grep -oE "7-day content calendar|which WhatsApp token works" | head -2 | wc -l)
+# The newest note must be the first one on the page: two notes published by the
+# same boot used to tie on their timestamp and come out in the wrong order.
+FIRST_NOTE=$(printf '%s' "$WN" | grep -oE "Changes now reach the screen|A log that tells you what to do|which WhatsApp token works" | head -1)
+if [ "$FIRST_NOTE" = "Changes now reach the screen" ]; then
+  echo "  ok   the newest release is listed first"
+else
+  echo "  FAIL the first release listed is: $FIRST_NOTE"
+  fail=1
+fi
+HOME_NEW=$(curl -s "$BASE/" | grep -oE "Changes now reach the screen|A log that tells you what to do" | head -2 | wc -l)
 if [ "$HOME_NEW" -ge 1 ]; then
   echo "  ok   the homepage shows recent releases"
 else
@@ -552,29 +623,28 @@ else
   echo "  FAIL could not re-sign in after go-live (got $RELOGIN)"
   fail=1
 fi
-AUDIT=$(curl -s -b "$JAR" -X POST "$BASE/api/ops/logs" -H 'content-type: application/json' -d '{"action":"audit"}')
-if printf '%s' "$AUDIT" | grep -q '"ok":true'; then
-  echo "  ok   the audit runs against the live system"
-else
-  echo "  FAIL audit: $AUDIT"
-  fail=1
-fi
-LOGS=$(curl -s -b "$JAR" "$BASE/api/ops/logs")
-if printf '%s' "$LOGS" | grep -q '"reference"'; then
-  echo "  ok   findings carry a quotable reference"
-else
-  echo "  FAIL no references in the log"
-  fail=1
-fi
-if printf '%s' "$LOGS" | grep -q '"action"'; then
-  echo "  ok   every finding carries a course of action"
-else
-  echo "  FAIL findings have no course of action"
-  fail=1
-fi
+LOGS_API="$BASE/api/ops/logs"
+# Matched in the shell, not through a pipe: `printf … | grep -q` on a page of a
+# few hundred kB fails under `pipefail` when grep exits at the first match.
+contains() { # contains <label> <text> <fixed string>
+  if [[ "$2" == *"$3"* ]]; then echo "  ok   $1"; else echo "  FAIL $1 (no: $3)"; fail=1; fi
+}
+lacks() { # lacks <label> <text> <fixed string>
+  if [[ "$2" == *"$3"* ]]; then echo "  FAIL $1 (found: $3)"; fail=1; else echo "  ok   $1"; fi
+}
+
+# --- findings: what is wrong now
+AUDIT=$(curl -s -b "$JAR" -X POST "$LOGS_API" -H 'content-type: application/json' -d '{"action":"audit"}')
+contains "the audit runs against the live system" "$AUDIT" '"ok":true'
+contains "the audit reports that every check ran" "$AUDIT" '"failedChecks":[]'
+LOGS=$(curl -s -b "$JAR" "$LOGS_API")
+contains "findings carry a quotable reference" "$LOGS" '"reference":"LOG-'
+contains "findings carry a machine-readable code" "$LOGS" '"code":"WA_'
+contains "every finding carries its course of action as steps" "$LOGS" '"steps":"[{'
+lacks "after go-live no finding reports the demo password" "$LOGS" 'SEC_DEMO_PASSWORD'
 LOG_PAGE_CODE=$(curl -s -o /tmp/logs-page.html -w "%{http_code}" -b "$JAR" "$BASE/admin/logs")
-if grep -q "Operational log" /tmp/logs-page.html; then
-  echo "  ok   the operational log page renders"
+if grep -q "Operational log" /tmp/logs-page.html && grep -q "Course of action" /tmp/logs-page.html; then
+  echo "  ok   the operational log page renders findings with a course of action"
 else
   echo "  FAIL /admin/logs did not render (status $LOG_PAGE_CODE)"
   head -c 300 /tmp/logs-page.html
@@ -582,34 +652,127 @@ else
 fi
 # Closing without a note must be refused: a row closed to clear the screen is
 # indistinguishable from one fixed.
-LOG_ID=$(printf '%s' "$LOGS" | sed -n 's/.*"id":\([0-9]*\).*/\1/p' | head -1)
-if [ -n "$LOG_ID" ]; then
-  NO_NOTE=$(curl -s -o /dev/null -w "%{http_code}" -b "$JAR" -X POST "$BASE/api/ops/logs" \
+LOG_ID=$(printf '%s' "$LOGS" | sed -n 's/.*"logs":\[{"id":\([0-9]*\).*/\1/p' | head -1)
+LOG_REF=$(printf '%s' "$LOGS" | grep -o '"reference":"LOG-[^"]*"' | head -1 | cut -d'"' -f4)
+if [ -n "$LOG_ID" ] && [ -n "$LOG_REF" ]; then
+  NO_NOTE=$(curl -s -o /dev/null -w "%{http_code}" -b "$JAR" -X POST "$LOGS_API" \
     -H 'content-type: application/json' -d "{\"action\":\"set-status\",\"id\":$LOG_ID,\"status\":\"resolved\"}")
-  if [ "$NO_NOTE" = "400" ]; then
-    echo "  ok   closing a finding without a note is refused"
-  else
-    echo "  FAIL closing without a note returned $NO_NOTE, expected 400"
-    fail=1
-  fi
-  WITH=$(curl -s -o /dev/null -w "%{http_code}" -b "$JAR" -X POST "$BASE/api/ops/logs" \
+  expect "closing a finding without a note is refused" 400 "$NO_NOTE"
+  WITH=$(curl -s -o /dev/null -w "%{http_code}" -b "$JAR" -X POST "$LOGS_API" \
     -H 'content-type: application/json' -d "{\"action\":\"set-status\",\"id\":$LOG_ID,\"status\":\"acknowledged\",\"note\":\"seen\"}")
-  if [ "$WITH" = "200" ]; then
-    echo "  ok   a finding can be acknowledged"
-  else
-    echo "  FAIL acknowledging returned $WITH"
-    fail=1
-  fi
-  curl -s -b "$JAR" -X POST "$BASE/api/ops/logs" -H 'content-type: application/json' \
-    -d "{\"action\":\"set-status\",\"id\":$LOG_ID,\"status\":\"open\",\"note\":\"reopened by smoke\"}" -o /dev/null
-fi
-if curl -s -o /dev/null -w "%{http_code}" "$BASE/api/ops/logs" | grep -q '^401$'; then
-  echo "  ok   the log is staff-only"
+  expect "a finding can be acknowledged" 200 "$WITH"
+
+  # "Resolved" is a claim the audit checks. The fault is still there, so the
+  # next audit must put it back — under the same reference, with the reason.
+  curl -s -o /dev/null -b "$JAR" -X POST "$LOGS_API" -H 'content-type: application/json' \
+    -d "{\"action\":\"set-status\",\"id\":$LOG_ID,\"status\":\"resolved\",\"note\":\"closed by the smoke test without fixing it\"}"
+  lacks "a finding marked resolved leaves the open list" "$(curl -s -b "$JAR" "$LOGS_API")" "\"reference\":\"$LOG_REF\""
+  REAUDIT=$(curl -s -b "$JAR" -X POST "$LOGS_API" -H 'content-type: application/json' -d '{"action":"audit"}')
+  contains "the audit reopens a finding that was closed but is still true" "$REAUDIT" '"reopened":1'
+  ONE=$(curl -s -b "$JAR" "$LOGS_API?ref=$LOG_REF")
+  contains "…it is open again under the same reference" "$ONE" '"status":"open"'
+  contains "…with the reason recorded" "$ONE" 'Reopened by the audit'
+
+  # "Ignored" is the deliberate mute and must survive an audit.
+  curl -s -o /dev/null -b "$JAR" -X POST "$LOGS_API" -H 'content-type: application/json' \
+    -d "{\"action\":\"set-status\",\"id\":$LOG_ID,\"status\":\"ignored\",\"note\":\"accepted for the smoke test\"}"
+  MUTED=$(curl -s -b "$JAR" -X POST "$LOGS_API" -H 'content-type: application/json' -d '{"action":"audit"}')
+  contains "the audit leaves an ignored finding alone" "$MUTED" '"reopened":0'
+  contains "…and counts it as skipped" "$MUTED" '"skipped":1'
+  contains "…and it is in the history" "$(curl -s -b "$JAR" "$LOGS_API?view=history")" "\"reference\":\"$LOG_REF\""
+  curl -s -o /dev/null -b "$JAR" -X POST "$LOGS_API" -H 'content-type: application/json' \
+    -d "{\"action\":\"set-status\",\"id\":$LOG_ID,\"status\":\"open\",\"note\":\"reopened by smoke\"}"
+
+  FINDING_TEXT=$(curl -s -b "$JAR" "$LOGS_API?ref=$LOG_REF&format=text")
+  contains "one finding exports as text by its reference" "$FINDING_TEXT" "$LOG_REF"
+  contains "…with its numbered course of action" "$FINDING_TEXT" 'course_of_action:'
 else
-  echo "  FAIL the log is readable without signing in"
+  echo "  FAIL no finding to work with: $LOGS"
   fail=1
 fi
 
+# --- actions: what was done. Everything this script did above went through the
+# same routes the screens use, so the log should already hold the story of it.
+echo "Action log"
+ACTIONS=$(curl -s -b "$JAR" "$LOGS_API?view=actions&limit=500")
+contains "actions carry a quotable reference" "$ACTIONS" '"reference":"ACT-'
+for action in auth.login orders.place orders.confirm orders.paid production.start staff.go-live logs.audit logs.set-status; do
+  contains "the log recorded $action" "$ACTIONS" "\"action\":\"$action\""
+done
+contains "a successful sign-in names the account and the role granted" "$ACTIONS" '"actor":"admin@khanbaba.com.au","actor_role":"admin"'
+contains "a customer's order is attributed to the customer, not to staff" "$ACTIONS" '"actor":"customer"'
+contains "every row stores its course of action" "$ACTIONS" '"course":"{\"code\":'
+contains "every row names the build that handled it" "$ACTIONS" "\"build\":\"$BUILD_LABEL\""
+
+PROBLEMS=$(curl -s -b "$JAR" "$LOGS_API?view=actions&problems=1&limit=500")
+contains "refused sign-ins are recorded as denied" "$PROBLEMS" '"outcome":"denied"'
+contains "…classified as bad credentials" "$PROBLEMS" '"error_code":"BAD_CREDENTIALS"'
+contains "…against the account that was tried" "$PROBLEMS" '"actor":"counter@khanbaba.com.au"'
+contains "a refused request is recorded with its class" "$PROBLEMS" '"error_code":"INVALID_INPUT"'
+lacks "the problems filter returns no successes" "$PROBLEMS" '"outcome":"ok"'
+
+# Nothing secret may be stored: this script has sent two staff passwords, a
+# customer password and a card's last four through logged routes.
+EVERYTHING=$(curl -s -b "$JAR" "$LOGS_API?view=actions&format=ndjson")
+for secret in 'KhanBaba2026!' 'smoke-owner-pass-1' 'smoke-cook-pass' 'whatever-pass-1' '"paymentLast4":"4242"'; do
+  lacks "the action log does not contain $secret" "$EVERYTHING" "$secret"
+done
+contains "a card's last four digits are stored as [redacted]" "$EVERYTHING" '"paymentLast4":"[redacted]"'
+lacks "the action log does not contain a customer's email" "$EVERYTHING" 'promo@example.com'
+lacks "the action log does not contain a customer's phone" "$EVERYTHING" '0400000001'
+lacks "the action log does not contain a customer's name" "$EVERYTHING" 'Promo Smoke'
+lacks "the action log does not contain a customer's address" "$EVERYTHING" 'Bulolo Drive'
+
+# A wrong password in the email box must not be written down as an "actor".
+curl -s -o /dev/null -X POST "$BASE/api/staff/login" -H 'content-type: application/json' \
+  -d '{"email":"Sm0ke@Typed.Password","password":"x"}'
+MISTYPED=$(curl -s -b "$JAR" "$LOGS_API?view=actions&component=auth&limit=3&format=ndjson")
+contains "a sign-in naming no account is recorded as an unknown account" "$MISTYPED" '"actor":"unknown account"'
+lacks "…and what was typed is stored nowhere" "$MISTYPED" 'yped.Password'
+lacks "…in any case" "$(printf '%s' "$MISTYPED" | tr 'A-Z' 'a-z')" 'yped.password'
+
+# One format, three exports.
+TEXT=$(curl -s -b "$JAR" "$LOGS_API?view=actions&format=text&limit=20")
+contains "the text export opens with what produced it" "$TEXT" '# khanbaba operational log · view=actions'
+contains "…names the build" "$TEXT" "build=$BUILD_LABEL"
+contains "…has key=value fields a search can match" "$TEXT" 'outcome=ok'
+contains "…and the course of action under each entry" "$TEXT" 'course_of_action:'
+CSV_HEAD=$(curl -s -b "$JAR" "$LOGS_API?view=actions&format=csv&limit=5" | head -1)
+contains "the CSV export has a header row" "$CSV_HEAD" 'occurred_at,level,reference,component,action,outcome'
+CSV_TYPE=$(curl -s -o /dev/null -D - -b "$JAR" "$LOGS_API?view=actions&format=csv&limit=5" | tr -d '\r' | grep -i '^content-disposition:')
+contains "…and downloads as a file" "$CSV_TYPE" 'attachment; filename="khanbaba-actions-'
+NDJSON_FIRST=$(curl -s -b "$JAR" "$LOGS_API?view=actions&format=ndjson&limit=5" | head -1)
+if printf '%s' "$NDJSON_FIRST" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{const o=JSON.parse(s);process.exit(o.ref&&o.course_of_action&&Array.isArray(o.course_of_action.steps)&&o.course_of_action.steps.length>0?0:1)})'; then
+  echo "  ok   the NDJSON export is one object per line, course of action included"
+else
+  echo "  FAIL NDJSON line: $NDJSON_FIRST"
+  fail=1
+fi
+contains "findings export as CSV too" "$(curl -s -b "$JAR" "$LOGS_API?format=csv" | head -1)" 'last_seen_at,severity,reference,code'
+
+ACT_REF=$(printf '%s' "$ACTIONS" | grep -o '"reference":"ACT-[^"]*"' | head -1 | cut -d'"' -f4)
+ONE_ACTION=$(curl -s -b "$JAR" "$LOGS_API?ref=$ACT_REF&format=text")
+contains "one action is found by the reference somebody quotes" "$ONE_ACTION" "$ACT_REF"
+EXPECT=404 check "/api/ops/logs?ref=ACT-ZZ-000000-00000" -b "$JAR"
+
+SUMMARY=$(curl -s -b "$JAR" "$LOGS_API?summary=1")
+contains "the summary counts findings and actions" "$SUMMARY" '"last24h":'
+
+ACTIONS_PAGE=$(curl -s -b "$JAR" "$BASE/admin/logs?view=actions")
+contains "the action log has a screen" "$ACTIONS_PAGE" 'auth.login'
+contains "…with a download for each format" "$ACTIONS_PAGE" 'format=ndjson'
+check "/admin/logs?view=history" -b "$JAR"
+check "/admin/logs?view=actions&problems=1&component=auth&q=login" -b "$JAR"
+
+for path in "/api/ops/logs" "/api/ops/logs?view=actions" "/api/ops/logs?view=actions&format=csv" "/api/ops/logs?summary=1"; do
+  expect "signed out, $path is refused" 401 "$(curl -s -o /dev/null -w "%{http_code}" "$BASE$path")"
+done
+# The kitchen can sign in, and the log is still not theirs to read.
+KITCHEN_JAR="$(mktemp)"
+expect "the kitchen login still signs in" 200 "$(post -c "$KITCHEN_JAR" /api/staff/login '{"email":"smoke-cook@khanbaba.com.au","password":"smoke-cook-pass-2"}')"
+expect "…and cannot read the log" 401 "$(curl -s -o /dev/null -w "%{http_code}" -b "$KITCHEN_JAR" "$LOGS_API?view=actions")"
+expect "…or run the audit" 401 "$(post -b "$KITCHEN_JAR" /api/ops/logs '{"action":"audit"}')"
+rm -f "$KITCHEN_JAR"
 
 rm -f "$JAR"
 if [ "$fail" = "1" ]; then

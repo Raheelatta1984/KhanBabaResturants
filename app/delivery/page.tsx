@@ -12,6 +12,7 @@ import { AutoRefresh } from "@/components/portal/AutoRefresh";
 import { OpsButton } from "@/components/portal/OpsButton";
 import { Icon } from "@/components/Icon";
 import { StatusBadge } from "@/components/ui";
+import { buildLabel } from "@/lib/build";
 
 export const dynamic = "force-dynamic";
 
@@ -76,7 +77,7 @@ export default async function DeliveryPage() {
 
   return (
     <div className="portal">
-      <PortalNav name={session.name} role={session.role} />
+      <PortalNav name={session.name} role={session.role} build={buildLabel()} />
       <AutoRefresh intervalMs={9000} />
       <main className="container portal-main">
         <div className="page-head">

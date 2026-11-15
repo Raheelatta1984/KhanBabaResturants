@@ -568,12 +568,19 @@ export function TableManager({
         </div>
       </section>
 
-      <div className="grid grid-3">
+      {/* As many cards across as fit. Three never did beside the sidebar, so
+          this page scrolled sideways on every screen. */}
+      <div
+        className="grid"
+        style={{ gridTemplateColumns: "repeat(auto-fill, minmax(min(100%, 350px), 1fr))" }}
+      >
         {tables.map((table) => (
           <article
             key={table.id}
             className="panel"
-            style={{ opacity: table.active ? 1 : 0.5 }}
+            // The grid's gap spaces the cards; the stacked-panel margin would
+            // push every card but the first 18px down its row.
+            style={{ opacity: table.active ? 1 : 0.5, marginTop: 0 }}
           >
             <div
               style={{

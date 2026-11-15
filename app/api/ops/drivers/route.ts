@@ -14,11 +14,12 @@ import {
   verifyDriverDocument,
   type DriverRow,
 } from "@/lib/drivers";
+import { withActionLog } from "@/lib/ops/actions";
 
 export const dynamic = "force-dynamic";
 
 /** Driver management: verification, approval, commercials, assignment, payout. */
-export async function POST(request: Request) {
+async function post(request: Request) {
   const session = await getApiSession(["admin", "manager", "delivery"]);
   if (!session)
     return NextResponse.json({ error: "Not authorised" }, { status: 401 });
@@ -172,3 +173,6 @@ export async function POST(request: Request) {
     );
   }
 }
+
+/** Every call is written to the action log: who, what, the outcome, what to do next. */
+export const POST = withActionLog("drivers", post);

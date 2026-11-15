@@ -10,6 +10,8 @@ import {
 } from "@/lib/db";
 import { isPgliteUrl, isSupabasePooler } from "@/lib/db/driver";
 import { mediaStorageSummary } from "@/lib/media";
+import { BUILD, buildLabel } from "@/lib/build";
+import { unpublishedReleaseNotes } from "@/lib/whats-new";
 
 export const dynamic = "force-dynamic";
 
@@ -22,7 +24,11 @@ const SETUP_HINT =
  * Deployment smoke test: confirms the Postgres connection, that the schema is
  * applied, and returns real row counts.
  *
- *   { ok, storage: "postgres", target, counts, media }
+ *   { ok, build, release, storage: "postgres", target, counts, media }
+ *
+ * `build` and `release` answer "is the new version live?" without a login:
+ * which version and commit this deployment is, and whether every release note
+ * it shipped with reached the "What's new" page.
  *
  * It also reports *why* it failed, because the page-level error boundary cannot:
  * a missing variable, a blank variable, a wrong password and a suspended project
@@ -36,6 +42,7 @@ export async function GET() {
     return NextResponse.json(
       {
         ok: false,
+        build: buildLabel(),
         storage: "unconfigured",
         reason: blank ? "blank-connection-string" : "missing-connection-string",
         error: blank
@@ -53,6 +60,7 @@ export async function GET() {
     return NextResponse.json(
       {
         ok: false,
+        build: buildLabel(),
         storage: "postgres",
         provider: "supabase",
         target: describeDatabaseTarget(),
@@ -119,9 +127,28 @@ export async function GET() {
     const version = await db.one<{ version: string }>(
       "SELECT version() AS version",
     );
+    const notesMissing = await unpublishedReleaseNotes(db);
+    const latest = await db.maybeOne<{ version: string | null; pr_number: number | null }>(
+      "SELECT version, pr_number FROM whats_new ORDER BY published_at DESC, id DESC LIMIT 1",
+    );
+    if (notesMissing.length > 0) {
+      warnings.push(
+        `Release note(s) for PR ${notesMissing.map((pr) => `#${pr}`).join(", ")} shipped in this build but are not on the "What's new" page.`,
+      );
+    }
 
     return NextResponse.json({
       ok: true,
+      build: buildLabel(),
+      release: {
+        version: BUILD.version,
+        pr: BUILD.pr,
+        commit: BUILD.commit || null,
+        builtAt: BUILD.builtAt || null,
+        notesBundled: BUILD.notes,
+        notesMissing,
+        latestPublished: latest ? { version: latest.version, pr: latest.pr_number } : null,
+      },
       storage: "postgres",
       provider: "supabase",
       target: describeDatabaseTarget(),
@@ -163,6 +190,7 @@ export async function GET() {
     return NextResponse.json(
       {
         ok: false,
+        build: buildLabel(),
         storage: "postgres",
         provider: "supabase",
         target: describeDatabaseTarget(),

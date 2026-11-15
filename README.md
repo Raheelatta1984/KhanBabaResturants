@@ -378,7 +378,11 @@ Costs are reset each batch, never averaged, so you can see the impact of a suppl
 ## What's New
 
 - Public feed at `/whats-new`, filterable by category, with PR links.
-- Admin publisher at `/admin/whats-new` (pin, delete, version, PR number).
+- Admin publisher at `/admin/whats-new` (pin, delete, version, PR number), which also shows the build that is running.
+- Every PR ships its note as `whats-new/pr-<number>.json`. The notes are compiled into the build
+  (`npm run notes:build` → `lib/whats-new-notes.ts`, also run before every build) and published when the application
+  starts, so the note deploys with the code. The highest `version` among them is the version shown in the footer of
+  every page and at `/api/health`. See `docs/whats-new-backfill.md`.
 - Helper: `npm run whatsnew -- --from-git --limit 10` drafts entries from git history; add `--publish` to write them
   straight into Postgres (`DATABASE_URL`). Every PR should ship with a note, e.g.
   `npm run whatsnew -- --pr 42 --title "…" --summary "…" --category ops` (prints the JSON to paste) followed by
@@ -620,9 +624,13 @@ HTTPS and point the enabled webhooks (`/api/webhooks/uber`, `/api/webhooks/doord
   community returns.
 - Configure Supabase Storage (`SUPABASE_URL` + `SUPABASE_SECRET_KEY`) before adding dishes (see above).
 - Print table QR codes from **Admin → Tables & QR codes**.
-- Add a What's New entry for every release (`npm run whatsnew` or the admin publisher).
+- Add a What's New entry for every release: `whats-new/pr-<number>.json`, then `npm run notes:build`.
 - Monitor `GET /api/health`: `ok: false` means the database is unreachable (usually a missing or blank `DATABASE_URL`, or
-  a paused Supabase project).
+  a paused Supabase project). `build` names the version and commit that is running; `release.notesMissing` lists any
+  release note that shipped in the build and is not on the What's New page.
+- Open **Logs** in the staff bar (`/admin/logs`): findings are what is wrong now, the action log is what was done, and
+  every entry carries a course of action. A finding `SEC_DEMO_PASSWORD` means a live login still uses the demo password
+  printed above — run **Go live**. See `docs/operational-log.md` and `docs/where-to-click.md`.
 
 ## Roadmap
 

@@ -55,3 +55,29 @@ never have been set.
 
 Through `scripts/whats-new.mjs --publish` against Supabase, which is the same
 path the admin console uses. Not by editing the site HTML.
+
+## Why PR 24's note did not appear, and how notes are published now
+
+From PR 23 a note is a file, `whats-new/pr-<number>.json`, published when the
+application starts. That worked in CI and on a laptop and did nothing on the
+live site: the publisher read the folder at runtime, and on Vercel only files
+reached by an `import` are packaged with a function. The folder was not there,
+the read failed quietly, and the feed stayed at 3.5.0 while 3.6.0 was running.
+CI did not catch it because CI started the server from the checkout, where the
+folder exists.
+
+Since PR 25:
+
+- `scripts/generate-release-notes.mjs` compiles the folder into
+  `lib/whats-new-notes.ts`, which the publisher imports. It runs before every
+  build and dev start (`prebuild`, `predev`), and by hand with
+  `npm run notes:build`. The generated file is committed; CI fails if it is out
+  of date.
+- `lib/whats-new.ts` reads no files. A test asserts that.
+- CI removes the `whats-new/` folder before it starts the built server, so the
+  smoke test runs under the same condition as production.
+- `/api/health` reports `release.notesMissing`, and the operational log raises
+  `REL_NOTES_UNPUBLISHED`, if a note in the build is not in the feed.
+
+To add a note for a PR: create `whats-new/pr-<number>.json`, run
+`npm run notes:build`, and commit both files.

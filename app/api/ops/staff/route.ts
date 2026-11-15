@@ -11,6 +11,7 @@ import {
   setStaffActive,
   updateStaff,
 } from "@/lib/auth/users";
+import { withActionLog } from "@/lib/ops/actions";
 
 export const dynamic = "force-dynamic";
 
@@ -18,7 +19,7 @@ export const dynamic = "force-dynamic";
  * POST /api/ops/staff — team administration for administrators and managers.
  * The permission rules live in lib/auth/users.ts.
  */
-export async function POST(request: Request) {
+async function post(request: Request) {
   const session = await getApiSession(["admin", "manager"]);
   if (!session)
     return NextResponse.json({ error: "Not authorised" }, { status: 401 });
@@ -84,3 +85,25 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "Could not save" }, { status: 500 });
   }
 }
+
+/** Every call is written to the action log: who, what, the outcome, what to do next. */
+export const POST = withActionLog("staff", post, {
+  // A login is known by its address, not its row id. It is read back from the
+  // staff table, never copied from the form: an address that was rejected or
+  // mistyped is not written down.
+  target: async (db, { body }) => {
+    const id = Number(body?.id);
+    if (Number.isInteger(id) && id > 0) {
+      const row = await db.maybeOne<{ email: string }>("SELECT email FROM staff WHERE id = $1", [id]);
+      return row ? `staff:${row.email}` : null;
+    }
+    if (body?.action === "create" && typeof body.email === "string") {
+      const row = await db.maybeOne<{ email: string }>(
+        "SELECT email FROM staff WHERE lower(email) = $1",
+        [body.email.trim().toLowerCase()],
+      );
+      return row ? `staff:${row.email}` : null;
+    }
+    return null;
+  },
+});

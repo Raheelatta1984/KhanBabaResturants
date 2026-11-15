@@ -379,133 +379,135 @@ export function IntegrationDiagnostics() {
 
       {note ? <p className="small muted">{note}</p> : null}
 
-      <table className="table small">
-        <thead>
-          <tr>
-            <th>Credential</th>
-            <th>Source</th>
-            <th>Value</th>
-            <th>Read from</th>
-          </tr>
-        </thead>
-        <tbody>
-          {data.tokens ? (
+      <div className="table-scroll">
+        <table className="table small">
+          <thead>
             <tr>
-              <td colSpan={4} style={{ padding: 0 }}>
-                <div
-                  style={{
-                    border: "1px solid var(--line)",
-                    borderRadius: 8,
-                    padding: 10,
-                    margin: "8px 0",
-                  }}
-                >
-                  <b className="small">Which token works?</b>
-                  {data.tokens.attempts.length === 0 ? (
-                    <p className="tiny muted" style={{ marginTop: 6 }}>
-                      {data.tokens.nextStep}
-                    </p>
-                  ) : (
-                    <table className="table tiny" style={{ marginTop: 6 }}>
-                      <thead>
-                        <tr>
-                          <th>Token from</th>
-                          <th>Value</th>
-                          <th>Result</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {data.tokens.attempts.map((attempt, index) => (
-                          <tr key={`${attempt.origin}-${attempt.masked}-${index}`}>
-                            <td>
-                              {attempt.origin === "settings" ? (
-                                <>Admin portal</>
-                              ) : (
-                                <code className="tiny">{attempt.envKey}</code>
-                              )}
-                            </td>
-                            <td className="tiny muted">{attempt.masked || "—"}</td>
-                            <td>
-                              {attempt.ok ? (
-                                <span className="badge badge-green">accepted</span>
-                              ) : (
-                                <span className="badge badge-amber">
-                                  {attempt.error || "rejected"}
-                                </span>
-                              )}
-                              {attempt.ok && attempt.verifiedName ? (
-                                <span className="tiny muted"> {attempt.verifiedName}</span>
-                              ) : null}
-                              {!attempt.ok && attempt.hint ? (
-                                <div className="tiny muted">{attempt.hint}</div>
-                              ) : null}
-                            </td>
+              <th>Credential</th>
+              <th>Source</th>
+              <th>Value</th>
+              <th>Read from</th>
+            </tr>
+          </thead>
+          <tbody>
+            {data.tokens ? (
+              <tr>
+                <td colSpan={4} style={{ padding: 0 }}>
+                  <div
+                    style={{
+                      border: "1px solid var(--line)",
+                      borderRadius: 8,
+                      padding: 10,
+                      margin: "8px 0",
+                    }}
+                  >
+                    <b className="small">Which token works?</b>
+                    {data.tokens.attempts.length === 0 ? (
+                      <p className="tiny muted" style={{ marginTop: 6 }}>
+                        {data.tokens.nextStep}
+                      </p>
+                    ) : (
+                      <table className="table tiny" style={{ marginTop: 6 }}>
+                        <thead>
+                          <tr>
+                            <th>Token from</th>
+                            <th>Value</th>
+                            <th>Result</th>
                           </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  )}
-                  {data.tokens.recommendation ? (
-                    <p className="tiny" style={{ marginTop: 6 }}>
-                      {data.tokens.recommendation.message}{" "}
-                      {!data.tokens.recommendation.message.startsWith("The token currently") ? (
-                        <button
-                          className="btn btn-sm btn-primary"
-                          disabled={busy}
-                          onClick={() => void applyRecommendation()}
-                        >
-                          Apply
-                        </button>
-                      ) : null}
-                    </p>
-                  ) : null}
-                  {data.tokens.nextStep ? (
-                    <p className="tiny muted" style={{ marginTop: 6 }}>
-                      {data.tokens.nextStep}
-                    </p>
-                  ) : null}
-                </div>
-              </td>
-            </tr>
-          ) : null}
-          {data.credentials.map((row) => (
-            <tr key={row.field}>
-              <td>
-                <code className="tiny">{row.envKey}</code>
-              </td>
-              <td>
-                <span
-                  className={`badge ${
-                    row.source === "none"
-                      ? "badge-amber"
-                      : row.shadowed
+                        </thead>
+                        <tbody>
+                          {data.tokens.attempts.map((attempt, index) => (
+                            <tr key={`${attempt.origin}-${attempt.masked}-${index}`}>
+                              <td>
+                                {attempt.origin === "settings" ? (
+                                  <>Admin portal</>
+                                ) : (
+                                  <code className="tiny">{attempt.envKey}</code>
+                                )}
+                              </td>
+                              <td className="tiny muted">{attempt.masked || "—"}</td>
+                              <td>
+                                {attempt.ok ? (
+                                  <span className="badge badge-green">accepted</span>
+                                ) : (
+                                  <span className="badge badge-amber">
+                                    {attempt.error || "rejected"}
+                                  </span>
+                                )}
+                                {attempt.ok && attempt.verifiedName ? (
+                                  <span className="tiny muted"> {attempt.verifiedName}</span>
+                                ) : null}
+                                {!attempt.ok && attempt.hint ? (
+                                  <div className="tiny muted">{attempt.hint}</div>
+                                ) : null}
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    )}
+                    {data.tokens.recommendation ? (
+                      <p className="tiny" style={{ marginTop: 6 }}>
+                        {data.tokens.recommendation.message}{" "}
+                        {!data.tokens.recommendation.message.startsWith("The token currently") ? (
+                          <button
+                            className="btn btn-sm btn-primary"
+                            disabled={busy}
+                            onClick={() => void applyRecommendation()}
+                          >
+                            Apply
+                          </button>
+                        ) : null}
+                      </p>
+                    ) : null}
+                    {data.tokens.nextStep ? (
+                      <p className="tiny muted" style={{ marginTop: 6 }}>
+                        {data.tokens.nextStep}
+                      </p>
+                    ) : null}
+                  </div>
+                </td>
+              </tr>
+            ) : null}
+            {data.credentials.map((row) => (
+              <tr key={row.field}>
+                <td>
+                  <code className="tiny">{row.envKey}</code>
+                </td>
+                <td>
+                  <span
+                    className={`badge ${
+                      row.source === "none"
                         ? "badge-amber"
-                        : "badge-green"
-                  }`}
-                >
-                  {SOURCE_LABEL[row.source]}
-                </span>
-                {row.shadowed ? (
-                  <span className="tiny muted"> overriding portal value</span>
-                ) : null}
-              </td>
-              <td className="tiny muted">{row.value || "—"}</td>
-              <td>
-                <select
-                  className="input input-sm"
-                  disabled={busy}
-                  value={data.whatsapp.fieldSources[row.field] ?? "auto"}
-                  onChange={(event) => void setFieldSource(row.field, event.target.value)}
-                >
-                  <option value="auto">Follow global</option>
-                  <option value="env">Vercel</option>
-                  <option value="settings">Portal</option>
-                </select>
-              </td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
+                        : row.shadowed
+                          ? "badge-amber"
+                          : "badge-green"
+                    }`}
+                  >
+                    {SOURCE_LABEL[row.source]}
+                  </span>
+                  {row.shadowed ? (
+                    <span className="tiny muted"> overriding portal value</span>
+                  ) : null}
+                </td>
+                <td className="tiny muted">{row.value || "—"}</td>
+                <td>
+                  <select
+                    className="input input-sm"
+                    disabled={busy}
+                    value={data.whatsapp.fieldSources[row.field] ?? "auto"}
+                    onChange={(event) => void setFieldSource(row.field, event.target.value)}
+                  >
+                    <option value="auto">Follow global</option>
+                    <option value="env">Vercel</option>
+                    <option value="settings">Portal</option>
+                  </select>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
 
       {data.connection ? (
         <p className="small" style={{ marginTop: 12 }}>
@@ -570,46 +572,48 @@ export function IntegrationDiagnostics() {
         {data.catalog ? (
           data.catalog.ok ? (
             data.catalog.catalogs.length > 0 ? (
-              <table className="table tiny" style={{ marginTop: 8 }}>
-                <thead>
-                  <tr>
-                    <th>Catalog</th>
-                    <th>ID</th>
-                    <th>Status</th>
-                    <th></th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {data.catalog.catalogs.map((row) => (
-                    <tr key={row.id}>
-                      <td>{row.name}</td>
-                      <td>
-                        <code className="tiny">{row.id}</code>
-                      </td>
-                      <td>
-                        {row.connected ? (
-                          <span className="badge badge-green">connected</span>
-                        ) : (
-                          <span className="badge">available</span>
-                        )}
-                      </td>
-                      <td>
-                        {data.whatsapp.catalogId === row.id ? (
-                          <span className="tiny muted">in use</span>
-                        ) : (
-                          <button
-                            className="btn btn-sm"
-                            disabled={busy}
-                            onClick={() => void saveCatalog(row.id)}
-                          >
-                            Use this
-                          </button>
-                        )}
-                      </td>
+              <div className="table-scroll">
+                <table className="table tiny" style={{ marginTop: 8 }}>
+                  <thead>
+                    <tr>
+                      <th>Catalog</th>
+                      <th>ID</th>
+                      <th>Status</th>
+                      <th></th>
                     </tr>
-                  ))}
-                </tbody>
-              </table>
+                  </thead>
+                  <tbody>
+                    {data.catalog.catalogs.map((row) => (
+                      <tr key={row.id}>
+                        <td>{row.name}</td>
+                        <td>
+                          <code className="tiny">{row.id}</code>
+                        </td>
+                        <td>
+                          {row.connected ? (
+                            <span className="badge badge-green">connected</span>
+                          ) : (
+                            <span className="badge">available</span>
+                          )}
+                        </td>
+                        <td>
+                          {data.whatsapp.catalogId === row.id ? (
+                            <span className="tiny muted">in use</span>
+                          ) : (
+                            <button
+                              className="btn btn-sm"
+                              disabled={busy}
+                              onClick={() => void saveCatalog(row.id)}
+                            >
+                              Use this
+                            </button>
+                          )}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
             ) : (
               <div style={{ marginTop: 8 }}>
                 <p className="small">
@@ -669,54 +673,58 @@ export function IntegrationDiagnostics() {
               No zones configured — delivery falls back to the kitchen radius.
             </p>
           ) : (
-            <table className="table tiny" style={{ marginTop: 8 }}>
-              <thead>
-                <tr>
-                  <th>Zone</th>
-                  <th>Base</th>
-                  <th>/km</th>
-                  <th>Min</th>
-                </tr>
-              </thead>
-              <tbody>
-                {data.deliveryZones.rates.map((zone) => (
-                  <tr key={zone.name}>
-                    <td>
-                      {zone.name}
-                      <div className="muted">{zone.postcodes}</div>
-                    </td>
-                    <td>${zone.baseFee.toFixed(2)}</td>
-                    <td>${zone.perKm.toFixed(2)}</td>
-                    <td>${zone.minOrder.toFixed(0)}</td>
+            <div className="table-scroll">
+              <table className="table tiny" style={{ marginTop: 8 }}>
+                <thead>
+                  <tr>
+                    <th>Zone</th>
+                    <th>Base</th>
+                    <th>/km</th>
+                    <th>Min</th>
                   </tr>
-                ))}
-              </tbody>
-            </table>
+                </thead>
+                <tbody>
+                  {data.deliveryZones.rates.map((zone) => (
+                    <tr key={zone.name}>
+                      <td>
+                        {zone.name}
+                        <div className="muted">{zone.postcodes}</div>
+                      </td>
+                      <td>${zone.baseFee.toFixed(2)}</td>
+                      <td>${zone.perKm.toFixed(2)}</td>
+                      <td>${zone.minOrder.toFixed(0)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
           )}
         </div>
 
         <div className="card" style={{ padding: 14 }}>
           <b className="small">Social channels</b>
-          <table className="table tiny" style={{ marginTop: 8 }}>
-            <tbody>
-              <tr>
-                <td>Facebook Page</td>
-                <td>{data.social.facebookPageId ?? "not set"}</td>
-              </tr>
-              <tr>
-                <td>Facebook token</td>
-                <td>{data.social.facebookToken || "not set"}</td>
-              </tr>
-              <tr>
-                <td>Instagram account</td>
-                <td>{data.social.instagramAccountId ?? "not set"}</td>
-              </tr>
-              <tr>
-                <td>Instagram token</td>
-                <td>{data.social.instagramToken || "not set"}</td>
-              </tr>
-            </tbody>
-          </table>
+          <div className="table-scroll">
+            <table className="table tiny" style={{ marginTop: 8 }}>
+              <tbody>
+                <tr>
+                  <td>Facebook Page</td>
+                  <td>{data.social.facebookPageId ?? "not set"}</td>
+                </tr>
+                <tr>
+                  <td>Facebook token</td>
+                  <td>{data.social.facebookToken || "not set"}</td>
+                </tr>
+                <tr>
+                  <td>Instagram account</td>
+                  <td>{data.social.instagramAccountId ?? "not set"}</td>
+                </tr>
+                <tr>
+                  <td>Instagram token</td>
+                  <td>{data.social.instagramToken || "not set"}</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
         </div>
       </div>
     </section>

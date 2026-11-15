@@ -26,6 +26,7 @@ import {
 } from "@/lib/whatsapp/orders";
 import { sendFeedbackInvite } from "@/lib/feedback";
 import { triggerTableEncouragement } from "@/lib/music";
+import { withActionLog } from "@/lib/ops/actions";
 
 export const dynamic = "force-dynamic";
 
@@ -38,7 +39,7 @@ type Body = {
   channel?: string;
 };
 
-export async function POST(
+async function post(
   request: Request,
   context: { params: Promise<{ id: string }> },
 ) {
@@ -243,3 +244,16 @@ export async function POST(
     );
   }
 }
+
+/** Every call is written to the action log: who, what, the outcome, what to do next. */
+export const POST = withActionLog("orders", post, {
+  // Reads that the delivery screen repeats; logged only when they fail.
+  quiet: ["sync", "quote"],
+  // The route is addressed by row id; staff and customers know the order by its code.
+  target: async (db, { params }) => {
+    const id = Number(params?.id);
+    if (!Number.isInteger(id) || id <= 0) return null;
+    const row = await db.maybeOne<{ code: string }>("SELECT code FROM orders WHERE id = $1", [id]);
+    return row ? `order:${row.code}` : `order:#${id}`;
+  },
+});

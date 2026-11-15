@@ -8,6 +8,8 @@ import { SettingsForm } from "@/components/portal/AdminForms";
 import { AutoRefresh } from "@/components/portal/AutoRefresh";
 import { IntegrationDiagnostics } from "@/components/portal/IntegrationDiagnostics";
 import { marketingSnapshot, todayMenu } from "@/lib/marketing/engine";
+import { buildCalendar } from "@/lib/marketing/calendar";
+import { CopyText } from "@/components/portal/LogActions";
 import { publicBaseUrl } from "@/lib/url";
 
 export const dynamic = "force-dynamic";
@@ -29,6 +31,25 @@ export default async function MarketingPage() {
   const published = snapshot.posts.filter((post) => post.status === "published").length;
   const drafts = snapshot.posts.filter((post) => post.status === "draft").length;
   const lastBroadcast = snapshot.broadcasts[0] ?? null;
+  // Built from the menu already loaded above: no second read, and the calendar
+  // cannot disagree with the "today's menu" panel beside it.
+  const calendar = buildCalendar(menu);
+
+  /**
+   * The sections of this page. The sidebar links to two of them by #id, and
+   * for weeks neither id existed — the links went nowhere and the calendar had
+   * no screen at all. `npm run test:pg` now fails if a navigation link names a
+   * section that is not defined here.
+   */
+  const sections = [
+    { id: "platform-status", label: "Status" },
+    { id: "todays-menu", label: "Today's menu" },
+    { id: "content", label: "Content" },
+    { id: "content-calendar", label: "Content calendar" },
+    { id: "publish", label: "Publish a post" },
+    { id: "credentials", label: "Credentials" },
+    { id: "integration-diagnostics", label: "Integration diagnostics" },
+  ];
 
   return (
     <>
@@ -43,7 +64,15 @@ export default async function MarketingPage() {
         </div>
       </div>
 
-      <section className="panel">
+      <nav className="section-nav" aria-label="Sections of this page">
+        {sections.map((section) => (
+          <a key={section.id} href={`#${section.id}`}>
+            {section.label}
+          </a>
+        ))}
+      </nav>
+
+      <section className="panel anchor" id="platform-status">
         <div className="panel-head">
           <h3>Platform Status</h3>
           <span className="tiny muted">Credentials are stored in environment or settings</span>
@@ -91,7 +120,7 @@ export default async function MarketingPage() {
         </div>
       </section>
 
-      <section className="panel" style={{ marginTop: 18 }}>
+      <section className="panel anchor" id="todays-menu" style={{ marginTop: 18 }}>
         <div className="panel-head">
           <h3>Today's menu — one click</h3>
           <span className="tiny muted">{menu.weekday} · {menu.totalDishes} dishes on the pass</span>
@@ -115,101 +144,157 @@ export default async function MarketingPage() {
         />
       </section>
 
-      <section className="panel" style={{ marginTop: 18 }}>
+      <section className="panel anchor" id="content" style={{ marginTop: 18 }}>
         <div className="panel-head">
           <h3>Content</h3>
           <span className="tiny muted">
             {drafts} draft(s) · {published} published · {snapshot.blogs.length} blog post(s)
           </span>
         </div>
-        <table className="table small">
-          <thead>
-            <tr>
-              <th>#</th>
-              <th>Post</th>
-              <th>Status</th>
-              <th>Channels</th>
-              <th>Created</th>
-              <th></th>
-            </tr>
-          </thead>
-          <tbody>
-            {snapshot.posts.length === 0 ? (
+        <div className="table-scroll">
+          <table className="table small">
+            <thead>
               <tr>
-                <td colSpan={6} className="muted">
-                  No content yet — use “Save as draft instead” to generate the first post.
-                </td>
+                <th>#</th>
+                <th>Post</th>
+                <th>Status</th>
+                <th>Channels</th>
+                <th>Created</th>
+                <th></th>
               </tr>
-            ) : (
-              snapshot.posts.map((post) => (
-                <tr key={post.id}>
-                  <td>{post.id}</td>
-                  <td>
-                    <b>{post.title ?? post.kind}</b>
-                    <div className="tiny muted">{post.caption.slice(0, 90)}</div>
-                  </td>
-                  <td>
-                    <span className={`badge ${post.status === "published" ? "badge-green" : post.status === "failed" ? "badge-amber" : ""}`}>
-                      {post.status}
-                    </span>
-                  </td>
-                  <td className="tiny muted">
-                    {post.facebook_post_id ? "FB " : ""}
-                    {post.instagram_post_id ? "IG" : ""}
-                    {!post.facebook_post_id && !post.instagram_post_id ? "—" : ""}
-                  </td>
-                  <td className="tiny muted">
-                    {new Date(post.created_at).toLocaleDateString("en-AU")}
-                  </td>
-                  <td>
-                    {post.status !== "published" ? (
-                      <ActionForm
-                        endpoint="/api/ops/marketing"
-                        action="publish-saved"
-                        hidden={{ postId: post.id }}
-                        submitLabel="Publish"
-                        compact
-                        fields={[]}
-                      />
-                    ) : null}
+            </thead>
+            <tbody>
+              {snapshot.posts.length === 0 ? (
+                <tr>
+                  <td colSpan={6} className="muted">
+                    No content yet — use “Save as draft instead” to generate the first post.
                   </td>
                 </tr>
-              ))
-            )}
-          </tbody>
-        </table>
+              ) : (
+                snapshot.posts.map((post) => (
+                  <tr key={post.id}>
+                    <td>{post.id}</td>
+                    <td>
+                      <b>{post.title ?? post.kind}</b>
+                      <div className="tiny muted">{post.caption.slice(0, 90)}</div>
+                    </td>
+                    <td>
+                      <span className={`badge ${post.status === "published" ? "badge-green" : post.status === "failed" ? "badge-amber" : ""}`}>
+                        {post.status}
+                      </span>
+                    </td>
+                    <td className="tiny muted">
+                      {post.facebook_post_id ? "FB " : ""}
+                      {post.instagram_post_id ? "IG" : ""}
+                      {!post.facebook_post_id && !post.instagram_post_id ? "—" : ""}
+                    </td>
+                    <td className="tiny muted">
+                      {new Date(post.created_at).toLocaleDateString("en-AU")}
+                    </td>
+                    <td>
+                      {post.status !== "published" ? (
+                        <ActionForm
+                          endpoint="/api/ops/marketing"
+                          action="publish-saved"
+                          hidden={{ postId: post.id }}
+                          submitLabel="Publish"
+                          compact
+                          fields={[]}
+                        />
+                      ) : null}
+                    </td>
+                  </tr>
+                ))
+              )}
+            </tbody>
+          </table>
+        </div>
         {snapshot.broadcasts.length > 0 ? (
           <>
             <h4 style={{ marginTop: 16 }} className="small">Broadcast log</h4>
-            <table className="table tiny">
-              <thead>
-                <tr>
-                  <th>#</th>
-                  <th>When</th>
-                  <th>Recipients</th>
-                  <th>Sent</th>
-                  <th>Failed</th>
-                  <th>Mode</th>
-                </tr>
-              </thead>
-              <tbody>
-                {snapshot.broadcasts.map((log) => (
-                  <tr key={log.id}>
-                    <td>{log.id}</td>
-                    <td>{new Date(log.created_at).toLocaleString("en-AU")}</td>
-                    <td>{log.recipients}</td>
-                    <td>{log.sent}</td>
-                    <td>{log.failed}</td>
-                    <td>{log.sandbox ? "sandbox" : "live"}</td>
+            <div className="table-scroll">
+              <table className="table tiny">
+                <thead>
+                  <tr>
+                    <th>#</th>
+                    <th>When</th>
+                    <th>Recipients</th>
+                    <th>Sent</th>
+                    <th>Failed</th>
+                    <th>Mode</th>
                   </tr>
-                ))}
-              </tbody>
-            </table>
+                </thead>
+                <tbody>
+                  {snapshot.broadcasts.map((log) => (
+                    <tr key={log.id}>
+                      <td>{log.id}</td>
+                      <td>{new Date(log.created_at).toLocaleString("en-AU")}</td>
+                      <td>{log.recipients}</td>
+                      <td>{log.sent}</td>
+                      <td>{log.failed}</td>
+                      <td>{log.sandbox ? "sandbox" : "live"}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
           </>
         ) : null}
       </section>
 
-      <section className="panel" style={{ marginTop: 18 }}>
+      <section className="panel anchor" id="content-calendar" style={{ marginTop: 18 }}>
+        <div className="panel-head">
+          <h3>Content calendar — the next seven days</h3>
+          <a className="btn btn-sm btn-outline" href="/api/ops/marketing/calendar?format=md" target="_blank" rel="noreferrer">
+            Open as Markdown
+          </a>
+        </div>
+        <p className="small muted" style={{ marginBottom: 14 }}>
+          One ready-to-post caption a day, written from the {calendar.totalDishes} dishes on sale right now. Copy a
+          caption into Facebook, Instagram or WhatsApp, or paste it into “Publish a post” below. Nothing here is
+          posted automatically.
+        </p>
+        {calendar.days.length === 0 ? (
+          <p className="small muted">The menu has no dishes on sale, so there is nothing to build a calendar from.</p>
+        ) : (
+          <div className="cal-grid">
+            {calendar.days.map((day) => (
+              <article key={day.date} className="cal-day">
+                <header>
+                  <b>{day.weekday}</b>
+                  <span className="tiny muted">
+                    {day.date} · {day.bestTime}
+                  </span>
+                </header>
+                <span className="cal-theme">{day.theme}</span>
+                {day.featureDish ? (
+                  <span className="tiny muted">
+                    Feature: {day.featureDish}
+                    {day.pairing ? ` · with ${day.pairing}` : ""}
+                  </span>
+                ) : null}
+                <p>{day.action}</p>
+                <details>
+                  <summary>Caption · {day.channels.join(", ")}</summary>
+                  <pre style={{ marginTop: 8 }}>{day.caption}</pre>
+                </details>
+                <div style={{ marginTop: "auto" }}>
+                  <CopyText text={day.caption} label="Copy caption" />
+                </div>
+              </article>
+            ))}
+          </div>
+        )}
+        {calendar.notes.length > 0 ? (
+          <ul className="tiny muted" style={{ marginTop: 14, paddingLeft: 18 }}>
+            {calendar.notes.map((note) => (
+              <li key={note}>{note}</li>
+            ))}
+          </ul>
+        ) : null}
+      </section>
+
+      <section className="panel anchor" id="publish" style={{ marginTop: 18 }}>
         <div className="panel-head">
           <h3>Publish Marketing Post</h3>
         </div>
@@ -229,7 +314,7 @@ export default async function MarketingPage() {
         />
       </section>
 
-      <div style={{ marginTop: 18 }}>
+      <div className="anchor" id="credentials" style={{ marginTop: 18 }}>
         <SettingsForm
           values={settings}
           groups={[
@@ -269,7 +354,7 @@ export default async function MarketingPage() {
         />
       </div>
 
-      <div style={{ marginTop: 18 }}>
+      <div className="anchor" id="integration-diagnostics" style={{ marginTop: 18 }}>
         <IntegrationDiagnostics />
       </div>
     </>

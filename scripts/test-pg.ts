@@ -2510,45 +2510,101 @@ async function main() {
   );
 
   // -------------------------------------------------------------------------
-  // Release notes ship with the deploy
+  // Release notes ship inside the build
   // -------------------------------------------------------------------------
   section("Release notes");
 
-  const { releaseNotesFromDisk, publishReleaseNotes } = await import("../lib/whats-new");
+  const nodeFs = await import("node:fs");
+  const nodePath = await import("node:path");
+  const read = (file: string) => nodeFs.readFileSync(nodePath.join(process.cwd(), file), "utf8");
 
-  const onDisk = await releaseNotesFromDisk();
-  check("the repository carries release notes", onDisk.length >= 3, onDisk.length);
+  const { bundledReleaseNotes, publishReleaseNotes, unpublishedReleaseNotes } = await import("../lib/whats-new");
+
+  const bundled = bundledReleaseNotes();
+  check("the build carries release notes", bundled.length >= 5, bundled.length);
   check(
     "every note has a title and a summary",
-    onDisk.every((entry) => entry.note.title.length > 5 && entry.note.summary.length > 10),
+    bundled.every((entry) => entry.note.title.length > 5 && entry.note.summary.length > 10),
   );
   check(
     "every note names a PR number",
-    onDisk.every((entry) => Number.isInteger(entry.prNumber) && entry.prNumber > 0),
+    bundled.every((entry) => Number.isInteger(entry.prNumber) && entry.prNumber > 0),
   );
   check(
     "summaries stay short enough to fit the feed",
-    onDisk.every((entry) => entry.note.summary.length <= 320),
-    onDisk.map((entry) => entry.note.summary.length),
+    bundled.every((entry) => entry.note.summary.length <= 320),
+    bundled.map((entry) => entry.note.summary.length),
   );
   check(
     "versions look like semver",
-    onDisk.every((entry) => !entry.note.version || /^\d+\.\d+\.\d+$/.test(entry.note.version)),
+    bundled.every((entry) => !entry.note.version || /^\d+\.\d+\.\d+$/.test(entry.note.version)),
   );
 
-  // The real regression: PRs 20, 21 and 22 shipped with no note, so the feed
-  // stopped at #19 while the code kept moving.
+  // The bug this section exists for. The notes were read from disk at runtime;
+  // on Vercel the directory is not in the function, the read failed quietly and
+  // nothing published — while this suite, which runs from the checkout, passed.
+  // So the test no longer asks "can the folder be read". It asks whether the
+  // module the server imports matches the folder, and whether the publisher
+  // touches the file system at all.
+  const noteFiles = nodeFs
+    .readdirSync(nodePath.join(process.cwd(), "whats-new"))
+    .filter((name) => /^pr-\d+\.json$/.test(name))
+    .sort((a, b) => Number(a.match(/\d+/)?.[0]) - Number(b.match(/\d+/)?.[0]));
+  check(
+    "every whats-new/pr-<n>.json is compiled into the build",
+    noteFiles.length === bundled.length &&
+      noteFiles.every((name, index) => Number(name.match(/\d+/)?.[0]) === bundled[index].prNumber),
+    { files: noteFiles, bundled: bundled.map((entry) => entry.prNumber) },
+  );
+  check(
+    "the compiled notes say what the files say (run `npm run notes:build` if not)",
+    noteFiles.every((name, index) => {
+      const onDisk = JSON.parse(read(`whats-new/${name}`)) as { title: string; summary: string; version?: string };
+      const inBuild = bundled[index].note;
+      return onDisk.title === inBuild.title && onDisk.summary === inBuild.summary && onDisk.version === inBuild.version;
+    }),
+  );
+  // Code only: the file's own comment explains the old readdir, by name.
+  const publisherSource = read("lib/whats-new.ts")
+    .replace(/\/\*[\s\S]*?\*\//g, "")
+    .replace(/^\s*\/\/.*$/gm, "");
+  check(
+    "the publisher does not read the file system",
+    !/from\s+["']node:(fs|path)|from\s+["'](fs|path)["']|require\(|readdir|readFile|process\.cwd/.test(publisherSource),
+  );
+  check(
+    "the publisher imports the compiled notes",
+    /from\s+["']\.\/whats-new-notes["']/.test(publisherSource),
+  );
+
   const feedPrs = await db.query<{ pr_number: number }>(
     "SELECT pr_number FROM whats_new WHERE pr_number IS NOT NULL",
   );
   const seenPrs = new Set(feedPrs.map((row) => Number(row.pr_number)));
-  const missing = onDisk.map((entry) => entry.prNumber).filter((pr) => !seenPrs.has(pr));
-  check("every note on disk reached the feed", missing.length === 0, missing);
+  const missingNotes = bundled.map((entry) => entry.prNumber).filter((pr) => !seenPrs.has(pr));
+  check("every bundled note reached the feed on first boot", missingNotes.length === 0, missingNotes);
+  check("nothing is reported unpublished", (await unpublishedReleaseNotes(db)).length === 0);
 
-  const latest = await db.maybeOne<{ pr_number: number }>(
+  const newestBundled = Math.max(...bundled.map((entry) => entry.prNumber));
+  const latestNote = await db.maybeOne<{ pr_number: number }>(
     "SELECT pr_number FROM whats_new WHERE pr_number IS NOT NULL ORDER BY pr_number DESC LIMIT 1",
   );
-  check("the newest release in the feed is the newest PR", Number(latest?.pr_number) >= 22, latest?.pr_number);
+  check(
+    "the newest release in the feed is the newest bundled PR",
+    Number(latestNote?.pr_number) === newestBundled,
+    [latestNote?.pr_number, newestBundled],
+  );
+
+  // Two notes published by the same boot must still read newest-first. They
+  // used to share one now() and tie; the page then fell back to insertion order.
+  const feedOrder = await db.query<{ pr_number: number }>(
+    "SELECT pr_number FROM whats_new WHERE pr_number IS NOT NULL AND NOT pinned ORDER BY published_at DESC, id DESC LIMIT 2",
+  );
+  check(
+    "notes published together are ordered newest PR first",
+    Number(feedOrder[0]?.pr_number) === newestBundled && Number(feedOrder[1]?.pr_number) < newestBundled,
+    feedOrder,
+  );
 
   // Publishing must be idempotent, or every cold start duplicates the feed.
   const again = await publishReleaseNotes(db);
@@ -2558,72 +2614,249 @@ async function main() {
   );
   check("the three backfilled notes exist exactly once each", countAfter === 3, countAfter);
 
+  // A note that is missing is found, published once, and not twice — even when
+  // two instances start at the same moment, which is what a deploy looks like.
+  await db.query("DELETE FROM whats_new WHERE pr_number = $1", [newestBundled]);
+  const reported = await unpublishedReleaseNotes(db);
+  check("a missing note is reported by PR number", reported.length === 1 && reported[0] === newestBundled, reported);
+  const racing = await Promise.all([publishReleaseNotes(db), publishReleaseNotes(db), publishReleaseNotes(db)]);
+  check("three simultaneous boots publish it once between them", racing.reduce((sum, n) => sum + n, 0) === 1, racing);
+  const restored = Number(
+    (await db.one<{ c: number }>("SELECT COUNT(*) AS c FROM whats_new WHERE pr_number = $1", [newestBundled])).c,
+  );
+  check("the note exists exactly once afterwards", restored === 1, restored);
+
   // Version numbers must move forward; a feed that goes 3.2.1 -> 2.1.0 reads as
   // a downgrade and undermines trust in the release history.
+  const { BUILD, buildLabel, compareVersions } = await import("../lib/build");
   const versions = await db.query<{ pr_number: number; version: string | null }>(
-    "SELECT pr_number, version FROM whats_new WHERE pr_number BETWEEN 18 AND 22 ORDER BY pr_number",
+    "SELECT pr_number, version FROM whats_new WHERE pr_number >= 18 ORDER BY pr_number",
   );
-  const ordered = versions
-    .filter((row) => row.version)
-    .map((row) => row.version as string)
-    .map((value) => value.split(".").map(Number));
-  let monotonic = true;
-  for (let i = 1; i < ordered.length; i += 1) {
-    const [aMajor, aMinor, aPatch] = ordered[i - 1];
-    const [bMajor, bMinor, bPatch] = ordered[i];
-    const grows =
-      bMajor > aMajor ||
-      (bMajor === aMajor && bMinor > aMinor) ||
-      (bMajor === aMajor && bMinor === aMinor && bPatch >= aPatch);
-    if (!grows) monotonic = false;
+  const versionList = versions.filter((row) => row.version).map((row) => row.version as string);
+  check(
+    "release versions never go backwards",
+    versionList.every((value, index) => index === 0 || compareVersions(value, versionList[index - 1]) >= 0),
+    versions,
+  );
+
+  // -------------------------------------------------------------------------
+  // The build says what it is
+  // -------------------------------------------------------------------------
+  section("Build stamp");
+
+  const highest = [...bundled]
+    .filter((entry) => entry.note.version)
+    .sort((a, b) => compareVersions(a.note.version as string, b.note.version as string))
+    .pop();
+  check("the build version is the highest bundled release", BUILD.version === highest?.note.version, [
+    BUILD.version,
+    highest?.note.version,
+  ]);
+  check("the build names the PR that produced it", BUILD.pr === highest?.prNumber, BUILD.pr);
+  check("the label starts with the version", buildLabel().startsWith(`v${BUILD.version}`), buildLabel());
+  check("versions compare numerically, not as text", compareVersions("3.10.0", "3.9.0") > 0);
+  check(
+    "next.config stamps the commit and build time into the bundle",
+    /KB_BUILD_SHA/.test(read("next.config.mjs")) && /KB_BUILD_TIME/.test(read("next.config.mjs")),
+  );
+  check(
+    "the public footer, the staff bar and the health check all print the build",
+    /build/.test(read("components/SiteFooter.tsx")) &&
+      /build/.test(read("components/portal/PortalNav.tsx")) &&
+      /buildLabel\(\)/.test(read("app/api/health/route.ts")),
+  );
+
+  // -------------------------------------------------------------------------
+  // Navigation: one list, and nothing unreachable
+  // -------------------------------------------------------------------------
+  section("Navigation");
+
+  const { ADMIN_NAV, adminNavLinks, sidebarNav, activeHref } = await import("../lib/nav");
+  const { PORTAL_LINKS } = await import("../lib/auth/core");
+
+  /** Every static page under a directory, as a route. Dynamic segments are children of a linked page. */
+  const pagesUnder = (dir: string): string[] => {
+    const out: string[] = [];
+    const walk = (current: string) => {
+      for (const entry of nodeFs.readdirSync(current, { withFileTypes: true })) {
+        const full = nodePath.join(current, entry.name);
+        if (entry.isDirectory()) walk(full);
+        else if (entry.name === "page.tsx") {
+          out.push("/" + nodePath.relative(nodePath.join(process.cwd(), "app"), current).split(nodePath.sep).join("/"));
+        }
+      }
+    };
+    walk(nodePath.join(process.cwd(), "app", dir));
+    return out;
+  };
+  const pageFileFor = (route: string) => nodePath.join("app", route.replace(/^\//, ""), "page.tsx");
+  const routeExists = (route: string) => nodeFs.existsSync(nodePath.join(process.cwd(), pageFileFor(route)));
+
+  const navLinks = adminNavLinks();
+  const linkedPaths = new Set(navLinks.map((link) => link.href.split("#")[0]));
+
+  // The fault that was reported: a page that exists and that nothing links to.
+  const adminPages = pagesUnder("admin").filter((route) => !/\[|\/new$/.test(route));
+  const unlinked = adminPages.filter((route) => !linkedPaths.has(route));
+  check("every admin page is reachable from the navigation", unlinked.length === 0, unlinked);
+  check("the admin has a page for every navigation link", navLinks.every((link) => routeExists(link.href.split("#")[0])),
+    navLinks.filter((link) => !routeExists(link.href.split("#")[0])).map((link) => link.href));
+
+  // The other fault: links to a #section that no page defines.
+  const deadAnchors = navLinks
+    .filter((link) => link.href.includes("#"))
+    .filter((link) => {
+      const [route, anchor] = link.href.split("#");
+      return !new RegExp(`id=["'{]+${anchor}["'}]`).test(read(pageFileFor(route)));
+    })
+    .map((link) => link.href);
+  check("every #section a link names exists on its page", deadAnchors.length === 0, deadAnchors);
+
+  check("Marketing has its own group", ADMIN_NAV.some((group) => group.id === "marketing" && group.links.length >= 3));
+  check(
+    "the operational log is in the navigation",
+    navLinks.some((link) => link.href === "/admin/logs"),
+  );
+  check("no link appears twice", new Set(navLinks.map((link) => link.href)).size === navLinks.length);
+  check(
+    "the sidebar omits only the customer-facing extras",
+    sidebarNav().flatMap((group) => group.links).length === navLinks.filter((link) => !link.hubOnly).length &&
+      sidebarNav().flatMap((group) => group.links).every((link) => !link.hubOnly),
+  );
+
+  // The Command centre promises "every option in one place". It kept its own
+  // list of tiles, and that list is where Marketing and the log were missing.
+  const hubSource = read("app/admin/hub/page.tsx");
+  check("the Command centre draws its tiles from the shared list", /ADMIN_NAV/.test(hubSource));
+  check("the Command centre keeps no list of its own", !/href:\s*["']\//.test(hubSource));
+  check("the sidebar draws from the shared list", /sidebarNav\(\)/.test(read("components/portal/AdminSide.tsx")));
+
+  const topBar = (role: string) => PORTAL_LINKS.filter((link) => (link.roles as string[]).includes(role)).map((link) => link.href);
+  check(
+    "an administrator's top bar includes Marketing and Logs",
+    topBar("admin").includes("/admin/marketing") && topBar("admin").includes("/admin/logs"),
+    topBar("admin"),
+  );
+  check("a manager sees the same top bar as an administrator", topBar("manager").join() === topBar("admin").join());
+  check("kitchen staff are not offered admin screens", topBar("kitchen").every((href) => !href.startsWith("/admin")), topBar("kitchen"));
+  check("every top-bar link has a page", PORTAL_LINKS.every((link) => routeExists(link.href)));
+
+  const sidebarHrefs = sidebarNav().flatMap((group) => group.links).map((link) => link.href);
+  check(
+    "on the Marketing page the Marketing tab is the active one, not Admin",
+    activeHref("/admin/marketing", topBar("admin")) === "/admin/marketing",
+    activeHref("/admin/marketing", topBar("admin")),
+  );
+  check("a dish editor keeps Menu highlighted", activeHref("/admin/menu/12", sidebarHrefs) === "/admin/menu");
+  check("the overview does not light up on every admin page", activeHref("/admin/orders", sidebarHrefs) === "/admin/orders");
+  check("an unknown path highlights nothing", activeHref("/somewhere/else", sidebarHrefs) === null);
+
+  // A course of action that says "go to /admin/xyz" must lead somewhere. Every
+  // in-app path written into the playbook and the audit is checked against the
+  // pages that exist, including its #section.
+  const PATH = /\/(?:admin|counter|kitchen|delivery|staff|menu|checkout|whats-new)(?:\/[a-z-]+)*(?:#[a-z-]+)?/g;
+  const whereTargets = new Set<string>();
+  for (const file of ["lib/ops/playbook.ts", "lib/ops/log.ts"]) {
+    for (const match of read(file).matchAll(/where:\s*(?:"([^"]*)"|`([^`]*)`)/g)) {
+      for (const found of (match[1] ?? match[2] ?? "").match(PATH) ?? []) whereTargets.add(found);
+    }
   }
-  check("release versions never go backwards", monotonic, versions);
+  check("the playbook points at in-app screens", whereTargets.size >= 12, whereTargets.size);
+  const deadTargets = [...whereTargets].filter((target) => {
+    const [route, anchor] = target.split("#");
+    if (!routeExists(route)) return true;
+    return anchor ? !new RegExp(`id=["'{]+${anchor}["'}]`).test(read(pageFileFor(route))) : false;
+  });
+  check("every screen a course of action names exists", deadTargets.length === 0, deadTargets);
 
   // -------------------------------------------------------------------------
-  // Operational log: a finding, its reference, and the action
+  // Settings: a saved value must not be served stale
   // -------------------------------------------------------------------------
-  section("Operational log");
+  section("Settings freshness");
 
-  const { auditSystem, recordFindings, referenceFor, openLogs, setLogStatus, logSummary, runAudit } =
-    await import("../lib/ops/log");
+  const { SETTINGS_TTL_MS } = await import("../lib/settings");
+  await setSetting("restaurant_phone", "02 5550 0001");
+  check("a value written through the app is read back at once", (await getSettings()).restaurant_phone === "02 5550 0001");
+
+  // The live fault: the write happens in one serverless instance, the read in
+  // another, so nothing clears the reader's copy. Simulated here with a write
+  // the settings module does not see.
+  await getSettings();
+  await db.query("UPDATE settings SET value = $1 WHERE key = 'restaurant_phone'", ["02 5550 0002"]);
+  check("the reader's copy lives for a bounded time", SETTINGS_TTL_MS > 0 && SETTINGS_TTL_MS <= 5000, SETTINGS_TTL_MS);
+  await new Promise((resolve) => setTimeout(resolve, SETTINGS_TTL_MS + 150));
+  check(
+    "a value changed by another instance is picked up after the bound",
+    (await getSettings()).restaurant_phone === "02 5550 0002",
+    (await getSettings()).restaurant_phone,
+  );
+  check(
+    "page renders are scoped to the request, not to the process",
+    /requestScope\(\)/.test(read("lib/settings.ts")) && /from "react"/.test(read("lib/settings.ts")),
+  );
+  await setSetting("restaurant_phone", "0461 382 923");
+
+  // -------------------------------------------------------------------------
+  // Operational log, part one: findings
+  // -------------------------------------------------------------------------
+  section("Operational log: findings");
+
+  const {
+    auditChecks,
+    ensureFreshAudit,
+    inspectSystem,
+    lastAuditAt,
+    logSummary,
+    openLogs,
+    closedLogs,
+    recordFindings,
+    referenceFor,
+    runAudit,
+    setLogStatus,
+  } = await import("../lib/ops/log");
 
   // A reference must be stable and quotable: the same subject yields the same
   // handle every time, or a reopened fault forks into duplicates.
-  const refA = referenceFor({ kind: "whatsapp", severity: "error", title: "Token rejected", action: "x", subject: "whatsapp:token" });
-  const refB = referenceFor({ kind: "whatsapp", severity: "warning", title: "A different wording", action: "y", subject: "whatsapp:token" });
+  const refA = referenceFor({ kind: "whatsapp", title: "Token rejected", subject: "whatsapp:token" });
+  const refB = referenceFor({ kind: "whatsapp", title: "A different wording", subject: "whatsapp:token" });
   check("the same subject yields the same reference", refA === refB, [refA, refB]);
   check("a reference is readable and prefixed by kind", /^LOG-WA-/.test(refA), refA);
-  const refC = referenceFor({ kind: "menu", severity: "info", title: "Token rejected", action: "x", subject: "whatsapp:token" });
+  const refC = referenceFor({ kind: "menu", title: "Token rejected", subject: "whatsapp:token" });
   check("a different kind yields a different reference", refA !== refC, [refA, refC]);
-  check(
-    "the reference is short enough to say out loud",
-    refA.length <= 24,
-    refA,
-  );
-  check(
-    "the reference names the subject, not the table prefix",
-    /^LOG-WA-TOKEN-/.test(refA),
-    refA,
-  );
+  check("the reference is short enough to say out loud", refA.length <= 24, refA);
+  check("the reference names the subject, not the table prefix", /^LOG-WA-TOKEN-/.test(refA), refA);
 
-  // Every finding the audit produces must carry a course of action. This is the
-  // whole point of the table: a log entry that only names a symptom moves the
-  // problem rather than solving it.
-  const findings = await auditSystem(db);
+  // Every finding must carry a course of action as ordered steps. That is the
+  // point of the table: an entry that only names a symptom moves the problem.
+  const inspection = await inspectSystem(db);
+  const findings = inspection.findings;
+  check("every audit check ran", inspection.failed.length === 0, inspection.failed);
   check("the audit finds something worth reporting", findings.length > 0, findings.length);
   check(
-    "every finding has a course of action",
-    findings.every((finding) => finding.action.length > 30),
-    findings.filter((finding) => finding.action.length <= 30).map((f) => f.title),
+    "every finding has a machine-readable code",
+    findings.every((finding) => /^[A-Z][A-Z0-9_]{3,}$/.test(finding.code ?? "")),
+    findings.filter((finding) => !finding.code).map((finding) => finding.title),
   );
+  check(
+    "every finding has ordered steps, each with an owner",
+    findings.every(
+      (finding) =>
+        (finding.steps?.length ?? 0) > 0 &&
+        finding.steps!.every((step) => step.do.length > 8 && typeof step.owner === "string" && step.owner.length > 0),
+    ),
+    findings.filter((finding) => !finding.steps?.length).map((finding) => finding.title),
+  );
+  check(
+    "every finding says how to confirm the fix",
+    findings.every((finding) => finding.steps!.some((step) => Boolean(step.verify))),
+    findings.filter((finding) => !finding.steps!.some((step) => Boolean(step.verify))).map((finding) => finding.code),
+  );
+  check("every finding still carries the course as one paragraph", findings.every((finding) => finding.action.length > 30));
   check(
     "every finding has a severity from the allowed set",
     findings.every((finding) => ["info", "warning", "error", "critical"].includes(finding.severity)),
   );
-  check(
-    "every finding has a title that names the problem",
-    findings.every((finding) => finding.title.length > 10),
-  );
+  check("every finding has a title that names the problem", findings.every((finding) => finding.title.length > 10));
   check(
     "findings are not duplicated within one audit",
     new Set(findings.map((finding) => referenceFor(finding))).size === findings.length,
@@ -2637,19 +2870,103 @@ async function main() {
     (await getSettings()).restaurant_address,
   );
 
-  // Recording is idempotent, or every boot would multiply the log.
-  const first = await recordFindings(db, findings);
-  check("the first recording writes rows", first.written === findings.length, first);
-  const second = await recordFindings(db, findings);
-  check("the second recording writes nothing new", second.written === 0, second);
-  check("the second recording bumps the existing rows", second.updated === findings.length, second);
-  const occurrences = await db.one<{ c: number }>(
-    "SELECT COUNT(*) AS c FROM operation_logs WHERE occurrences >= 2",
+  // A published password on a live login is the most serious thing the audit
+  // can find, and before this release nothing reported it. Go-live ran earlier
+  // in this suite, so the starting point is the clean one.
+  const { hashPassword } = await import("../lib/auth/password");
+  check("after go-live no login is reported as using the demo password", !findings.some((finding) => finding.code === "SEC_DEMO_PASSWORD"));
+  const floorLogin = await db.one<{ id: number; email: string; password_hash: string; active: boolean }>(
+    "SELECT id, email, password_hash, active FROM staff WHERE role NOT IN ('admin','manager') ORDER BY id LIMIT 1",
   );
-  check("re-seeing a finding increments its occurrence count", Number(occurrences.c) > 0, occurrences.c);
+  const adminLogin = await db.one<{ id: number; email: string; password_hash: string; active: boolean }>(
+    "SELECT id, email, password_hash, active FROM staff WHERE role = 'admin' ORDER BY id LIMIT 1",
+  );
+  const demoFinding = async () => (await inspectSystem(db)).findings.find((finding) => finding.code === "SEC_DEMO_PASSWORD");
+  await db.query("UPDATE staff SET password_hash = $1, active = TRUE WHERE id = $2", [hashPassword(DEMO_PASSWORD), floorLogin.id]);
+  const floorFinding = await demoFinding();
+  check("an active login on the published demo password is reported", Boolean(floorFinding), floorFinding?.title);
+  check("…as an error, naming the account", floorFinding?.severity === "error" && (floorFinding?.detail ?? "").includes(floorLogin.email), [floorFinding?.severity, floorFinding?.detail]);
+  check("…with go-live as the first step, for the owner", /Go live/.test(floorFinding?.steps?.[0]?.do ?? "") && floorFinding?.steps?.[0]?.owner === "owner", floorFinding?.steps?.[0]);
+  await db.query("UPDATE staff SET password_hash = $1, active = TRUE WHERE id = $2", [hashPassword(DEMO_PASSWORD), adminLogin.id]);
+  const adminFinding = await demoFinding();
+  check("…and as critical once an administrator is on it", adminFinding?.severity === "critical", adminFinding?.severity);
+  check("the finding never contains the password itself", !JSON.stringify(adminFinding).includes(DEMO_PASSWORD));
+  await db.query("UPDATE staff SET active = FALSE WHERE id = $1", [floorLogin.id]);
+  await db.query("UPDATE staff SET password_hash = $1, active = $2 WHERE id = $3", [adminLogin.password_hash, adminLogin.active, adminLogin.id]);
+  check("a disabled login on the demo password is not reported: it cannot sign in", !(await demoFinding()));
+  await db.query("UPDATE staff SET password_hash = $1, active = $2 WHERE id = $3", [floorLogin.password_hash, floorLogin.active, floorLogin.id]);
+
+  // Supabase serves every table in `public` through its Data API. A table
+  // without row level security is then readable with the project's public key.
+  // The engine under test has no API roles, so the check must stay silent here…
+  check("outside Supabase the API-exposure check reports nothing", !findings.some((finding) => finding.code === "SEC_TABLES_OPEN_TO_API"));
+  // …and must speak up once they exist, as they do in production.
+  await db.exec("CREATE ROLE anon NOLOGIN; GRANT SELECT ON ALL TABLES IN SCHEMA public TO anon; GRANT INSERT ON whatsapp_messages TO anon;");
+  const exposure = (await inspectSystem(db)).findings.find((finding) => finding.code === "SEC_TABLES_OPEN_TO_API");
+  const exposedTables = (exposure?.evidence?.tables ?? []) as string[];
+  check("a table the public API role can read, with row level security off, is reported", exposedTables.includes("whatsapp_messages") && exposedTables.includes("orders"), exposedTables.length);
+  check("…as critical when it holds personal data", exposure?.severity === "critical", exposure?.severity);
+  check("…noting which tables that role can also write to", JSON.stringify(exposure?.evidence?.writable) === JSON.stringify(["whatsapp_messages"]), exposure?.evidence?.writable);
+  check("…with the exact statement that closes each one", ((exposure?.evidence?.fix ?? []) as string[]).includes("ALTER TABLE public.orders ENABLE ROW LEVEL SECURITY;"));
+  check(
+    "the two log tables are not among them: the schema closes those itself",
+    !exposedTables.includes("action_logs") && !exposedTables.includes("operation_logs"),
+    exposedTables.filter((name) => name.endsWith("_logs")),
+  );
+  await db.exec("ALTER TABLE whatsapp_messages ENABLE ROW LEVEL SECURITY;");
+  const afterOne = (await inspectSystem(db)).findings.find((finding) => finding.code === "SEC_TABLES_OPEN_TO_API");
+  check("enabling row level security on a table takes it off the list", !((afterOne?.evidence?.tables ?? []) as string[]).includes("whatsapp_messages"));
+  check(
+    "…and the application, as owner, still reads and writes that table",
+    Number((await db.one<{ c: number }>("SELECT COUNT(*) AS c FROM whatsapp_messages")).c) >= 0,
+  );
+  await db.exec("ALTER TABLE whatsapp_messages DISABLE ROW LEVEL SECURITY; REVOKE ALL ON ALL TABLES IN SCHEMA public FROM anon; DROP ROLE anon;");
+  check("with the API role gone the finding is gone", !(await inspectSystem(db)).findings.some((finding) => finding.code === "SEC_TABLES_OPEN_TO_API"));
+
+  // The schema is applied one statement at a time on real Postgres. Its one
+  // DO block must survive the splitter whole, or the site would not start.
+  const schemaStatements = splitStatements(SCHEMA_SQL);
+  const doBlocks = schemaStatements.filter((statement) => statement.startsWith("DO $$"));
+  check(
+    "the schema's DO block reaches Postgres as one statement",
+    doBlocks.length === 1 && /END \$\$$/.test(doBlocks[0]) && !schemaStatements.some((statement) => /^(END|EXCEPTION|FOREACH|EXECUTE|DECLARE|RAISE)\b/.test(statement)),
+    doBlocks.length,
+  );
+  // …and it must not be able to stop the site from starting. Run it as a role
+  // that may not alter the tables, which is the failure it has to survive.
+  const logRls = async () =>
+    (await db.query<{ relname: string; on: boolean }>(
+      "SELECT relname, relrowsecurity AS on FROM pg_class WHERE relname IN ('action_logs', 'operation_logs') ORDER BY relname",
+    )).map((row) => `${row.relname}=${row.on}`).join(" ");
+  await db.exec("ALTER TABLE action_logs DISABLE ROW LEVEL SECURITY; CREATE ROLE kb_not_owner NOLOGIN; GRANT USAGE ON SCHEMA public TO kb_not_owner;");
+  let refused: unknown = null;
+  try {
+    await db.exec("SET ROLE kb_not_owner");
+    await db.exec(doBlocks[0]);
+  } catch (error) {
+    refused = error;
+  } finally {
+    await db.exec("RESET ROLE");
+  }
+  check("a role that may not alter the log tables gets a notice from the schema, not an error", refused === null, refused);
+  check("…and the table is left as it was, for the audit to report", (await logRls()) === "action_logs=false operation_logs=true", await logRls());
+  await db.exec(doBlocks[0]);
+  check("…and the next start, as the owner, closes it", (await logRls()) === "action_logs=true operation_logs=true", await logRls());
+  await db.exec("REVOKE USAGE ON SCHEMA public FROM kb_not_owner; DROP ROLE kb_not_owner;");
+
+  // First audit writes; the second only refreshes.
+  const firstAudit = await runAudit(db);
+  check("the first audit writes one row per finding", firstAudit.written === findings.length, firstAudit);
+  check("the first audit clears nothing", firstAudit.cleared === 0, firstAudit.cleared);
+  const secondAudit = await runAudit(db);
+  check("the second audit writes nothing new", secondAudit.written === 0, secondAudit);
+  check("the second audit refreshes the existing rows", secondAudit.updated === findings.length, secondAudit);
+  const occurrences = await db.one<{ c: number }>("SELECT COUNT(*) AS c FROM operation_logs WHERE occurrences >= 2");
+  check("re-seeing a finding increments its occurrence count", Number(occurrences.c) === findings.length, occurrences.c);
+  check("each audit records when it ran", Boolean(await lastAuditAt(db)));
 
   const open = await openLogs(db);
-  check("open findings are readable", open.length > 0, open.length);
+  check("open findings are readable", open.length === findings.length, open.length);
   check(
     "the worst severity sorts first",
     open.every((row, index) => {
@@ -2658,39 +2975,565 @@ async function main() {
       return rank[open[index - 1].severity] <= rank[row.severity];
     }),
   );
-  check("every stored row keeps its action", open.every((row) => row.action.length > 30));
+  check("every stored row keeps its steps", open.every((row) => JSON.parse(row.steps ?? "[]").length > 0));
+  check("every stored row keeps its code", open.every((row) => Boolean(row.code)));
 
-  // Closing requires a reason, and a closed row must stay closed.
+  // "Resolved" is a claim, and the audit checks it. Marking a fault resolved
+  // while it is still there used to hide it for ever.
   const target = open[0];
-  const closed = await setLogStatus(db, target.id, "resolved", "test-harness", "verified in the harness");
-  check("a finding can be resolved", closed === true);
-  const afterClose = await openLogs(db);
-  check("a resolved finding leaves the open list", !afterClose.some((row) => row.id === target.id));
-
-  const closedAgain = await recordFindings(db, findings.filter((f) => referenceFor(f) === target.reference));
-  check("a resolved finding is not silently reopened", closedAgain.skipped === 1, closedAgain);
-  check(
-    "a resolved finding keeps its resolution note",
-    (await db.one<{ note: string }>("SELECT resolution_note AS note FROM operation_logs WHERE id = $1", [target.id])).note ===
-      "verified in the harness",
+  check("a finding can be resolved", (await setLogStatus(db, target.id, "resolved", "test-harness", "verified in the harness")) === true);
+  check("a resolved finding leaves the open list", !(await openLogs(db)).some((row) => row.id === target.id));
+  const afterResolve = await runAudit(db);
+  check("a resolved finding that is still true is reopened by the audit", afterResolve.reopened === 1, afterResolve);
+  const reopenedRow = await db.one<{ status: string; note: string | null; resolved_at: string | null; reference: string }>(
+    "SELECT status, resolution_note AS note, resolved_at::text AS resolved_at, reference FROM operation_logs WHERE id = $1",
+    [target.id],
   );
+  check("…and is open again under the same reference", reopenedRow.status === "open" && reopenedRow.reference === target.reference, reopenedRow);
+  check("…with the reason recorded, including who had closed it", /Reopened by the audit/.test(reopenedRow.note ?? "") && /test-harness/.test(reopenedRow.note ?? ""), reopenedRow.note);
+  check("…and no resolution timestamp", reopenedRow.resolved_at === null, reopenedRow.resolved_at);
 
-  const reopened = await setLogStatus(db, target.id, "open", "test-harness", "came back");
-  check("a finding can be reopened deliberately", reopened === true);
+  // "Ignored" is the deliberate mute, and it must hold.
+  const muted = open[open.length - 1];
+  await setLogStatus(db, muted.id, "ignored", "test-harness", "accepted for now");
+  const afterIgnore = await runAudit(db);
+  check("an ignored finding is left alone by the audit", afterIgnore.skipped === 1 && afterIgnore.reopened === 0, afterIgnore);
   check(
-    "reopening clears the resolution timestamp",
-    (await db.one<{ t: string | null }>("SELECT resolved_at::text AS t FROM operation_logs WHERE id = $1", [target.id])).t === null,
+    "…and stays ignored",
+    (await db.one<{ status: string }>("SELECT status FROM operation_logs WHERE id = $1", [muted.id])).status === "ignored",
   );
+  check("a finding can be reopened by hand", (await setLogStatus(db, muted.id, "open", "test-harness", "looking again")) === true);
+  check(
+    "reopening by hand clears the resolution timestamp",
+    (await db.one<{ t: string | null }>("SELECT resolved_at::text AS t FROM operation_logs WHERE id = $1", [muted.id])).t === null,
+  );
+  check("a missing log id is refused", (await setLogStatus(db, 999999, "resolved", "t", "note")) === false);
 
-  check("a missing log id is refused", (await setLogStatus(db, 999999, "resolved", "t", "n")) === false);
+  // A fault that goes away must leave the open list without anyone closing it.
+  const dish = await db.one<{ id: number; name: string }>(
+    "SELECT id, name FROM menu_items WHERE published AND is_available ORDER BY id LIMIT 1",
+  );
+  await db.query("UPDATE menu_items SET is_available = FALSE WHERE id = $1", [dish.id]);
+  const hidden = await runAudit(db);
+  const dishReference = referenceFor({ kind: "menu", title: "", subject: `menu_item:${dish.id}` });
+  check("hiding a dish raises a finding for that dish", hidden.written === 1 && hidden.findings.some((f) => f.subject === `menu_item:${dish.id}`), hidden);
+  await db.query("UPDATE menu_items SET is_available = TRUE WHERE id = $1", [dish.id]);
+  const shown = await runAudit(db);
+  check("making it available again clears the finding", shown.cleared === 1, shown);
+  const clearedRow = await db.one<{ status: string; by: string | null; note: string | null }>(
+    "SELECT status, resolved_by AS by, resolution_note AS note FROM operation_logs WHERE reference = $1",
+    [dishReference],
+  );
+  check("…closed by the audit, with the reason", clearedRow.status === "resolved" && clearedRow.by === "audit" && /no longer observes/.test(clearedRow.note ?? ""), clearedRow);
+  check("…and kept in the history", (await closedLogs(db)).some((row) => row.reference === dishReference));
+  await db.query("UPDATE menu_items SET is_available = FALSE WHERE id = $1", [dish.id]);
+  const hiddenAgain = await runAudit(db);
+  check("the same fault returning reopens the same row instead of adding one", hiddenAgain.reopened === 1 && hiddenAgain.written === 0, hiddenAgain);
+
+  // A check that crashes must not be read as "the fault went away". Without
+  // this, one bad query would silently close every finding of that kind.
+  const broken = auditChecks().map((entry) =>
+    entry.name === "menu"
+      ? { ...entry, run: async () => { throw new Error("relation \"menu_items\" does not exist"); } }
+      : entry,
+  );
+  const crashed = await runAudit(db, broken);
+  check("a crashing check is named in the result", crashed.failedChecks.length === 1 && crashed.failedChecks[0].check === "menu", crashed.failedChecks);
+  check("…and raises a finding of its own", crashed.findings.some((f) => f.code === "SYS_AUDIT_CHECK_FAILED"), crashed.findings.map((f) => f.code));
+  check(
+    "…and does not close the findings it could not check",
+    (await db.one<{ status: string }>("SELECT status FROM operation_logs WHERE reference = $1", [dishReference])).status === "open",
+  );
+  await db.query("UPDATE menu_items SET is_available = TRUE WHERE id = $1", [dish.id]);
+  const recovered = await runAudit(db);
+  check("once the check runs again, both the crash finding and the stale one close", recovered.cleared === 2 && recovered.failedChecks.length === 0, recovered);
+
+  // An order nobody accepted. The first version of this check asked for a
+  // status called `pending`, which does not exist, so it could never fire.
+  const probeDish = await db.one<{ item_id: number; variant_id: number }>(
+    `SELECT mi.id AS item_id, v.id AS variant_id FROM menu_items mi
+       JOIN item_variants v ON v.item_id = mi.id AND v.active
+      WHERE mi.published AND mi.is_available AND NOT mi.track_stock
+      ORDER BY mi.id, v.id LIMIT 1`,
+  );
+  const waiting = (
+    await createOrder(db, {
+      channel: "pickup",
+      customerName: "Audit Probe",
+      phone: "0400000111",
+      paymentMethod: "counter",
+      items: [{ itemId: probeDish.item_id, variantId: probeDish.variant_id, qty: 1 }],
+    })
+  ).order;
+  const orderReference = referenceFor({ kind: "orders", title: "", subject: `order:${waiting.code}` });
+  check("a new order waits in the status the audit looks for", waiting.status === "pending_confirm", waiting.status);
+  check("an order placed a moment ago is not reported", !(await inspectSystem(db)).findings.some((f) => f.subject === `order:${waiting.code}`));
+  await db.query("UPDATE orders SET created_at = now() - interval '2 hours' WHERE id = $1", [waiting.id]);
+  const stale = await runAudit(db);
+  const staleFinding = stale.findings.find((f) => f.subject === `order:${waiting.code}`);
+  check("an order left unaccepted for two hours is reported", staleFinding?.code === "ORD_NOT_ACCEPTED", stale.findings.map((f) => f.code));
+  check("…as an error, with the counter as the owner of the first step", staleFinding?.severity === "error" && staleFinding?.steps?.[0]?.owner === "counter", staleFinding?.steps?.[0]);
+  await cancelOrder(db, waiting.id, "test-harness", "audit probe");
+  await runAudit(db);
+  const orderRow = await db.one<{ status: string; by: string | null }>(
+    "SELECT status, resolved_by AS by FROM operation_logs WHERE reference = $1",
+    [orderReference],
+  );
+  check("cancelling it clears the finding", orderRow.status === "resolved" && orderRow.by === "audit", orderRow);
+
+  // The fault behind "I still can't see the new changes", reported by the system itself.
+  await db.query("DELETE FROM whats_new WHERE pr_number = $1", [newestBundled]);
+  const unpublished = await runAudit(db);
+  const releaseFinding = unpublished.findings.find((f) => f.code === "REL_NOTES_UNPUBLISHED");
+  check("a release note missing from the feed is reported", Boolean(releaseFinding), unpublished.findings.map((f) => f.code));
+  check("…naming the PR", new RegExp(`#${newestBundled}\\b`).test(releaseFinding?.detail ?? ""), releaseFinding?.detail);
+  await publishReleaseNotes(db);
+  check("publishing it clears the finding", (await runAudit(db)).cleared === 1);
 
   const logStats = await logSummary(db);
-  check("the summary counts open findings", logStats.open > 0, logStats.open);
+  check("the summary counts open findings", logStats.open === (await openLogs(db)).length && logStats.open > 0, logStats.open);
   check("the summary groups by kind", logStats.byKind.length > 0, logStats.byKind);
 
-  // The convenience wrapper must agree with its parts.
-  const ran = await runAudit(db);
-  check("runAudit reports the findings it saw", ran.findings.length === findings.length, ran.findings.length);
+  // The page audits on arrival, at most every ten minutes, and never twice at once.
+  check("a fresh audit is not repeated", (await ensureFreshAudit(db)).ran === false);
+  await db.query("UPDATE settings SET value = $1 WHERE key = 'ops_last_audit_at'", [
+    new Date(Date.now() - 11 * 60_000).toISOString(),
+  ]);
+  const simultaneous = await Promise.all([ensureFreshAudit(db), ensureFreshAudit(db), ensureFreshAudit(db)]);
+  check("a stale audit re-runs when a page asks, once between simultaneous page views", simultaneous.filter((entry) => entry.ran).length === 1, simultaneous.map((entry) => entry.ran));
+  await db.query("DELETE FROM settings WHERE key = 'ops_last_audit_at'");
+  check("a system that has never been audited is audited on the first page view", (await ensureFreshAudit(db)).ran === true);
+
+  // -------------------------------------------------------------------------
+  // Operational log, part two: the action log
+  // -------------------------------------------------------------------------
+  section("Operational log: actions");
+
+  const { classify, courseForAction, levelFor, outcomeFor } = await import("../lib/ops/playbook");
+  const {
+    actionSummary,
+    deriveTarget,
+    getAction,
+    listActions,
+    newActionReference,
+    parseCourse,
+    pruneActions,
+    recordAction,
+    redact,
+    scrubText,
+    UNKNOWN_ACCOUNT,
+    withActionLog,
+  } = await import("../lib/ops/actions");
+  const { actionsCsv, actionsNdjson, findingsCsv, formatActionText, formatFindingText } = await import("../lib/ops/format");
+  const { createSessionToken, SESSION_COOKIE } = await import("../lib/auth/core");
+
+  // --- what an HTTP result means
+  check("2xx is ok", outcomeFor(200) === "ok" && outcomeFor(201) === "ok");
+  check("a validation failure is rejected, not failed", outcomeFor(400) === "rejected" && outcomeFor(409) === "rejected");
+  check("401, 403 and 429 are denied", outcomeFor(401) === "denied" && outcomeFor(403) === "denied" && outcomeFor(429) === "denied");
+  check("5xx and a thrown error are failed", outcomeFor(500) === "failed" && outcomeFor(null, true) === "failed");
+
+  const ctx = (over: Partial<Parameters<typeof classify>[0]>) => ({
+    component: "whatsapp",
+    action: "whatsapp.send",
+    outcome: "failed" as const,
+    httpStatus: 502,
+    error: "",
+    ...over,
+  });
+  check(
+    "Meta's expired token is recognised whatever status wraps it",
+    classify(ctx({ error: "(#190) Error validating access token: Session has expired", httpStatus: 400, outcome: "rejected" })) === "META_190",
+  );
+  check("a closed 24-hour window is recognised", classify(ctx({ error: "131047 Re-engagement message" })) === "META_131047");
+  check("a wrong password is BAD_CREDENTIALS", classify(ctx({ component: "auth", action: "auth.login", outcome: "denied", httpStatus: 401 })) === "BAD_CREDENTIALS");
+  check("no session elsewhere is AUTH_REQUIRED", classify(ctx({ component: "menu", action: "menu.save", outcome: "denied", httpStatus: 401 })) === "AUTH_REQUIRED");
+  // The diagnosis has to be the right one, or the steps send someone to fix
+  // the wrong thing. These three were all misread on the first real run.
+  check(
+    "a password change refused for an ended session is not called a wrong password",
+    classify(ctx({ component: "auth", action: "auth.change-password", outcome: "denied", httpStatus: 401, error: "Not authorised" })) === "AUTH_REQUIRED",
+  );
+  const wrongCurrent = courseForAction(ctx({ component: "auth", action: "auth.change-password", outcome: "denied", httpStatus: 403, error: "Your current password is not correct", actorRole: "kitchen" }));
+  check(
+    "a mistyped current password is not called a permissions problem",
+    wrongCurrent.code === "WRONG_CURRENT_PASSWORD" && /Caps Lock/.test(wrongCurrent.steps[0].do) && wrongCurrent.steps[0].owner === "kitchen",
+    wrongCurrent,
+  );
+  const refusedSession = courseForAction(ctx({ component: "staff", action: "staff.create", outcome: "denied", httpStatus: 401, error: "Not authorised", actorRole: "kitchen" }));
+  const noSession = courseForAction(ctx({ component: "staff", action: "staff.create", outcome: "denied", httpStatus: 401, error: "Not authorised", actorRole: null }));
+  check(
+    "a refused request says whether a session was presented, and for which role",
+    /A kitchen session was presented and refused/.test(refusedSession.summary) && /kitchen role is not allowed/.test(refusedSession.steps[1].do) && /no valid staff session/.test(noSession.summary),
+    [refusedSession.summary, noSession.summary],
+  );
+  const knownAccount = courseForAction(ctx({ component: "auth", action: "auth.login", outcome: "denied", httpStatus: 401, target: "staff:kitchen@khanbaba.com.au" }));
+  const unknownAccount = courseForAction(ctx({ component: "auth", action: "auth.login", outcome: "denied", httpStatus: 401, target: null }));
+  check(
+    "a refused sign-in is explained differently for a real account and for one that does not exist",
+    /kitchen@khanbaba\.com\.au/.test(knownAccount.summary) && /Reset password/.test(knownAccount.steps[1].where ?? "") && /no staff account that exists/.test(unknownAccount.summary) && !unknownAccount.steps.some((step) => /reset/i.test(step.do)),
+    [knownAccount.summary, unknownAccount.summary],
+  );
+  check("404 is NOT_FOUND and 400 is INVALID_INPUT", classify(ctx({ outcome: "rejected", httpStatus: 404 })) === "NOT_FOUND" && classify(ctx({ outcome: "rejected", httpStatus: 400 })) === "INVALID_INPUT");
+  check("an unexplained 500 is SERVER_ERROR", classify(ctx({ httpStatus: 500, error: "boom" })) === "SERVER_ERROR");
+  check("a database outage is recognised", classify(ctx({ httpStatus: 500, error: "connect ECONNREFUSED 10.0.0.1:6543" })) === "DB_UNREACHABLE");
+
+  // Every row carries a course of action — including the ones that worked.
+  const matrix = [
+    ctx({ error: "(#190) Error validating access token" }),
+    ctx({ error: "131047" }),
+    ctx({ error: "131030 not in allowed list" }),
+    ctx({ error: "(#100) Unsupported post request" }),
+    ctx({ error: "rate limit hit" }),
+    ctx({ error: "ECONNREFUSED" }),
+    ctx({ error: "WhatsApp is not configured" }),
+    ctx({ error: "Chicken Karahi is sold out" }),
+    ctx({ error: "We do not deliver to that postcode" }),
+    ctx({ component: "auth", action: "auth.login", outcome: "denied", httpStatus: 401 }),
+    ctx({ component: "auth", action: "auth.login", outcome: "denied", httpStatus: 429 }),
+    ctx({ component: "menu", action: "menu.save", outcome: "denied", httpStatus: 401 }),
+    ctx({ outcome: "denied", httpStatus: 403 }),
+    ctx({ outcome: "rejected", httpStatus: 404 }),
+    ctx({ outcome: "rejected", httpStatus: 409 }),
+    ctx({ outcome: "rejected", httpStatus: 413 }),
+    ctx({ outcome: "rejected", httpStatus: 400, error: "Name is required" }),
+    ctx({ httpStatus: 500, error: "boom" }),
+    ctx({ component: "orders", action: "orders.confirm", outcome: "ok", httpStatus: 200 }),
+    ctx({ component: "music", action: "music.create-track", outcome: "ok", httpStatus: 200 }),
+    ctx({ component: "settings", action: "settings.update", outcome: "ok", httpStatus: 200, keys: ["whatsapp_access_token", "restaurant_address"] }),
+  ];
+  const courses = matrix.map((entry) => courseForAction(entry));
+  check(
+    "every outcome has a course of action with at least one owned step",
+    courses.every((course) => course.code.length > 1 && course.summary.length > 10 && course.steps.length > 0 && course.steps.every((step) => step.do.length >= 5 && step.owner.length > 0)),
+    courses.filter((course) => !(course.steps.length > 0 && course.steps.every((step) => step.do.length >= 5 && step.owner.length > 0))).map((course) => course.code),
+  );
+  check("the failure classes are distinct", new Set(courses.slice(0, 18).map((course) => course.code)).size === 18, courses.slice(0, 18).map((course) => course.code));
+  check(
+    "changing a WhatsApp credential asks for it to be tested, and an address for a re-quote",
+    courses[20].steps.some((step) => /Test live connection/.test(step.do)) && courses[20].steps.some((step) => /Re-quote/.test(step.do)),
+    courses[20].steps.map((step) => step.do),
+  );
+  check("a routine success says plainly that nothing is left to do", /No follow-up/.test(courses[19].summary));
+
+  check("a dead Meta token that stops a send is critical", levelFor(matrix[0], "META_190") === "critical");
+  check("a refused request is a warning", levelFor(matrix[16], "INVALID_INPUT") === "warning");
+  check("a settings change that worked is a notice, so the trail can be filtered", levelFor(matrix[20], "OK") === "notice");
+  check("a routine success is info", levelFor(matrix[18], "OK") === "info");
+
+  // --- references
+  const actionRef = newActionReference("orders", new Date("2026-11-15T02:03:04Z"));
+  check("an action reference names the component and the UTC date", /^ACT-OR-261115-[0-9A-HJKMNP-TV-Z]{5}$/.test(actionRef), actionRef);
+  check("an unknown component still yields a two-letter code", /^ACT-ZZ-\d{6}-/.test(newActionReference("zz-new-thing")), newActionReference("zz-new-thing"));
+
+  // --- nothing secret is stored
+  const SECRETS = ["hunter2-PASSWORD", "EAAGm0PX4ZCpsBAsecrettoken123456", "sk_live_51secret", "P@ssw0rd.inEmailBox", "4242424242424242"];
+  const scrubbed = redact({
+    action: "create",
+    password: SECRETS[0],
+    newPassword: SECRETS[0],
+    accessToken: SECRETS[1],
+    stripe_secret_key: SECRETS[2],
+    cardNumber: SECRETS[4],
+    values: { whatsapp_access_token: SECRETS[1], restaurant_name: "Khan Baba" },
+    nested: { authorization: `Bearer ${SECRETS[1]}`, keep: "visible" },
+  }) as Record<string, unknown>;
+  const scrubbedText = JSON.stringify(scrubbed);
+  check("no secret survives redaction", SECRETS.every((secret) => !scrubbedText.includes(secret)), scrubbedText);
+  check("a setting is recorded by key, never by value", JSON.stringify(scrubbed.values) === JSON.stringify({ whatsapp_access_token: "[changed]", restaurant_name: "[changed]" }), scrubbed.values);
+  check("ordinary fields are kept", scrubbed.action === "create" && (scrubbed.nested as Record<string, unknown>).keep === "visible");
+
+  const contact = redact({ email: "ayesha.khan@example.com", phone: "+61 412 345 678", to: "0412345678" }) as Record<string, string>;
+  check("an email keeps its first letter and domain only", contact.email === "a***@example.com", contact.email);
+  check("a phone number keeps its last three digits only", contact.phone === "…678" && contact.to === "…678", contact);
+  check(
+    "text in an email field that is not an address is not echoed",
+    redact({ email: "P@ssw0rd" }) !== null && (redact({ email: "P@ssw0rd" }) as Record<string, string>).email === "[not an email]",
+    redact({ email: "P@ssw0rd" }),
+  );
+
+  const person = redact(
+    { action: "create", firstName: "Bilal", lastName: "Ahmed", licenceNumber: "NSW1234567", address: "12 Example St", notes: "gate code 4411", driverId: 7, status: "active", deliveryLat: -33.7 },
+    "", 0, "drivers",
+  ) as Record<string, unknown>;
+  check(
+    "for records about a person, only named-safe fields are stored",
+    person.firstName === "[withheld]" && person.licenceNumber === "[withheld]" && person.address === "[withheld]" && person.notes === "[withheld]" && person.deliveryLat === "[withheld]",
+    person,
+  );
+  check("…while the identifiers that make the row useful are kept", person.action === "create" && person.driverId === 7 && person.status === "active", person);
+
+  const scrubbedError = scrubText(
+    `GET https://graph.facebook.com/v20.0/123/messages?access_token=${SECRETS[1]} failed for ayesha.khan@example.com on 0412 345 678 with Bearer ${SECRETS[1]}`,
+  );
+  check(
+    "error text is scrubbed of tokens, addresses and numbers",
+    !scrubbedError.includes(SECRETS[1]) && !scrubbedError.includes("ayesha.khan") && !scrubbedError.includes("345 678") && scrubbedError.includes("graph.facebook.com"),
+    scrubbedError,
+  );
+
+  // --- the wrapper, end to end
+  const adminStaff = await db.one<{ id: number; name: string; email: string }>(
+    "SELECT id, name, email FROM staff WHERE role = 'admin' ORDER BY id LIMIT 1",
+  );
+  const sessionCookie = `${SESSION_COOKIE}=${await createSessionToken({ id: adminStaff.id, name: adminStaff.name, email: adminStaff.email, role: "admin" })}`;
+  const useDb = { db: async () => db };
+  const post = (body: unknown, headers: Record<string, string> = {}) =>
+    new Request("http://local.test/api/ops/orders/42", {
+      method: "POST",
+      headers: { "content-type": "application/json", ...headers },
+      body: typeof body === "string" ? body : JSON.stringify(body),
+    });
+  const routeContext = { params: Promise.resolve({ id: "42" }) };
+  const newest = async () => (await listActions(db, { limit: 1 })).rows[0];
+  const countActions = async () => Number((await db.one<{ c: number }>("SELECT COUNT(*) AS c FROM action_logs")).c);
+
+  const actionsBefore = await countActions();
+  const okHandler = withActionLog(
+    "orders",
+    async (request: Request) => {
+      const body = (await request.json()) as { action: string };
+      return Response.json({ ok: true, echoed: body.action }, { status: 200 });
+    },
+    useDb,
+  );
+  const okResponse = await okHandler(post({ action: "confirm", note: "table 4" }, { cookie: sessionCookie, "x-vercel-id": "syd1::abc-123" }), routeContext);
+  const okBody = (await okResponse.json()) as { ok: boolean; echoed: string };
+  check("the handler still reads its own request body", okBody.echoed === "confirm", okBody);
+  check("the response is returned untouched", okResponse.status === 200 && okBody.ok === true);
+  check("one action writes exactly one row", (await countActions()) === actionsBefore + 1);
+  const okRow = await newest();
+  check("the action is named component.verb", okRow.action === "orders.confirm" && okRow.component === "orders", okRow.action);
+  check("the outcome and status are recorded", okRow.outcome === "ok" && okRow.http_status === 200 && okRow.level === "info", [okRow.outcome, okRow.http_status, okRow.level]);
+  check("the actor is the signed-in member of staff", okRow.actor === adminStaff.email && okRow.actor_role === "admin", [okRow.actor, okRow.actor_role]);
+  check("the target comes from the route", okRow.target === "order:42", okRow.target);
+  check("the request is traceable to the function log and the build", okRow.request_id === "syd1::abc-123" && okRow.build === buildLabel() && okRow.route === "/api/ops/orders/42" && okRow.method === "POST", [okRow.request_id, okRow.build, okRow.route]);
+  check("the duration is measured", typeof okRow.duration_ms === "number" && okRow.duration_ms >= 0, okRow.duration_ms);
+  check("a success stores no error code", okRow.error_code === null, okRow.error_code);
+  check("the course of action is stored with the row", parseCourse(okRow.course).steps.length > 0 && /kitchen/i.test(parseCourse(okRow.course).steps[0].do), okRow.course);
+  check("the row can be fetched by the reference somebody quotes", (await getAction(db, okRow.reference))?.id === okRow.id);
+
+  // Five random characters will, eventually, be drawn twice on the same day.
+  // The reference is unique, so without a redraw that action would vanish.
+  let draws = 0;
+  const redrawn = await recordAction(
+    db,
+    { component: "orders", action: "ready", outcome: "ok", httpStatus: 200, actor: adminStaff.email, actorRole: "admin" },
+    (component, at) => ((draws += 1) <= 2 ? okRow.reference : newActionReference(component, at)),
+  );
+  check("a reference that is already taken is drawn again rather than losing the row", redrawn !== null && redrawn !== okRow.reference && draws === 3, [redrawn, draws]);
+  check("…and the row that already held it is untouched", (await getAction(db, okRow.reference))?.action === "orders.confirm");
+  check("…and the new row is stored under the reference that was returned", (await getAction(db, redrawn as string))?.action === "orders.ready");
+  const silenced = console.error;
+  console.error = () => undefined;
+  const exhausted = await recordAction(db, { component: "orders", action: "ready", outcome: "ok", httpStatus: 200 }, () => okRow.reference);
+  console.error = silenced;
+  check("if no reference is free the write is abandoned without throwing", exhausted === null);
+
+  const rejecting = withActionLog("menu", async () => Response.json({ error: "A dish needs a name" }, { status: 400 }), useDb);
+  await rejecting(post({ action: "save", item: { name: "" } }, { cookie: sessionCookie }), routeContext);
+  const rejectedRow = await newest();
+  check("a refused request is recorded as rejected, with its class", rejectedRow.outcome === "rejected" && rejectedRow.error_code === "INVALID_INPUT" && rejectedRow.level === "warning", [rejectedRow.outcome, rejectedRow.error_code, rejectedRow.level]);
+  check("the message quotes what the server said", /A dish needs a name/.test(rejectedRow.message), rejectedRow.message);
+
+  const denying = withActionLog("menu", async () => Response.json({ error: "Not authorised" }, { status: 401 }), useDb);
+  await denying(post({ action: "delete", id: 3 }), routeContext);
+  const deniedRow = await newest();
+  check("a request with no session is recorded as denied and anonymous", deniedRow.outcome === "denied" && deniedRow.actor === "anonymous" && deniedRow.error_code === "AUTH_REQUIRED", [deniedRow.outcome, deniedRow.actor, deniedRow.error_code]);
+  check("…and its first step is to sign in", /Sign in again/.test(parseCourse(deniedRow.course).steps[0].do));
+
+  const boom = new Error("connect ECONNREFUSED 10.0.0.1:6543");
+  const throwing = withActionLog("orders", async () => { throw boom; }, useDb);
+  let rethrown: unknown = null;
+  try {
+    await throwing(post({ action: "dispatch" }, { cookie: sessionCookie }), routeContext);
+  } catch (error) {
+    rethrown = error;
+  }
+  const failedRow = await newest();
+  check("a handler that throws still throws the same error", rethrown === boom);
+  check("…and the failure is recorded, classified and critical", failedRow.outcome === "failed" && failedRow.error_code === "DB_UNREACHABLE" && failedRow.level === "critical" && failedRow.http_status === null, [failedRow.outcome, failedRow.error_code, failedRow.level]);
+
+  // A forged cookie must not put someone else's name in the log.
+  await denying(post({ action: "delete", id: 3 }, { cookie: `${SESSION_COOKIE}=forged.token.value` }), routeContext);
+  check("a forged session cookie is not believed", (await newest()).actor === "anonymous");
+
+  // Sign-in: the actor is the account that was named, if it exists. Nothing
+  // else typed into the form is stored — a password can look exactly like an
+  // address, so the only safe test is whether the staff table knows it.
+  const login = withActionLog("auth", async () => Response.json({ error: "Those details do not match" }, { status: 401 }), { ...useDb, fallback: "login" });
+  const loginRequest = (email: string) =>
+    new Request("http://local.test/api/staff/login", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ email, password: SECRETS[0] }) });
+  const otherStaff = await db.one<{ email: string }>("SELECT email FROM staff WHERE role <> 'admin' ORDER BY id LIMIT 1");
+  await login(loginRequest(` ${otherStaff.email.toUpperCase()} `), { params: Promise.resolve({}) });
+  const loginRow = await newest();
+  check(
+    "a failed sign-in names the staff account that was tried",
+    loginRow.action === "auth.login" && loginRow.actor === otherStaff.email.toLowerCase() && loginRow.target === `staff:${otherStaff.email.toLowerCase()}` && loginRow.error_code === "BAD_CREDENTIALS",
+    [loginRow.action, loginRow.actor, loginRow.target, loginRow.error_code],
+  );
+  check("…and has no role, because none was granted", loginRow.actor_role === null, loginRow.actor_role);
+  for (const typed of [SECRETS[3], "P@ssw0rd.2026", "not-an-account@example.com", "hunter2"]) {
+    await login(loginRequest(typed), { params: Promise.resolve({}) });
+    const row = await newest();
+    check(
+      `“${typed.slice(0, 2)}…” typed into the email box is stored nowhere`,
+      row.actor === UNKNOWN_ACCOUNT && row.target === null && !JSON.stringify(row).includes(typed.slice(1)),
+      [row.actor, row.target, row.detail],
+    );
+  }
+  const granting = withActionLog("auth", async () => Response.json({ ok: true, role: "admin", redirectTo: "/admin" }), { ...useDb, fallback: "login" });
+  await granting(loginRequest(adminStaff.email), { params: Promise.resolve({}) });
+  const grantedRow = await newest();
+  check("a successful sign-in records who signed in and the role granted", grantedRow.outcome === "ok" && grantedRow.actor === adminStaff.email.toLowerCase() && grantedRow.actor_role === "admin", [grantedRow.outcome, grantedRow.actor, grantedRow.actor_role]);
+
+  // The whole table, searched for every secret that went through the wrapper.
+  const settingsHandler = withActionLog("settings", async () => Response.json({ ok: true, updated: 2 }), { ...useDb, fallback: "update" });
+  await settingsHandler(
+    new Request("http://local.test/api/ops/settings", {
+      method: "POST",
+      headers: { "content-type": "application/json", cookie: sessionCookie },
+      body: JSON.stringify({ values: { whatsapp_access_token: SECRETS[1], stripe_secret_key: SECRETS[2] } }),
+    }),
+    { params: Promise.resolve({}) },
+  );
+  const settingsRow = await newest();
+  check("a settings change records which keys changed", settingsRow.action === "settings.update" && settingsRow.target === "settings:whatsapp_access_token,stripe_secret_key" && settingsRow.level === "notice", [settingsRow.action, settingsRow.target, settingsRow.level]);
+  const staffHandler = withActionLog("staff", async () => Response.json({ ok: true }), useDb);
+  await staffHandler(post({ action: "password", id: 2, password: SECRETS[0] }, { cookie: sessionCookie }), { params: Promise.resolve({}) });
+  const everything = JSON.stringify(await db.query("SELECT * FROM action_logs"));
+  check("no password, token or key appears anywhere in the action log", SECRETS.every((secret) => !everything.includes(secret)), SECRETS.filter((secret) => everything.includes(secret)));
+
+  // Reads and transport controls: logged when they go wrong, not when they work.
+  const quiet = withActionLog("music", async (request: Request) => {
+    const body = (await request.json()) as { fail?: boolean };
+    return body.fail ? Response.json({ error: "Player offline" }, { status: 500 }) : Response.json({ ok: true });
+  }, { ...useDb, quiet: ["next"] });
+  const beforeQuiet = await countActions();
+  await quiet(post({ action: "next" }, { cookie: sessionCookie }), routeContext);
+  check("a quiet action that works writes nothing", (await countActions()) === beforeQuiet);
+  await quiet(post({ action: "next", fail: true }, { cookie: sessionCookie }), routeContext);
+  check("the same action failing is recorded", (await countActions()) === beforeQuiet + 1 && (await newest()).action === "music.next");
+
+  // Logging must never be the reason an action fails.
+  const dbDown = withActionLog("orders", async () => Response.json({ ok: true }), { db: async () => { throw new Error("log database down"); } });
+  const realConsoleError = console.error;
+  const functionLog: string[] = [];
+  console.error = (...args: unknown[]) => { functionLog.push(args.map(String).join(" ")); };
+  let stillWorks: Response;
+  try {
+    stillWorks = await dbDown(post({ action: "confirm" }, { cookie: sessionCookie }), routeContext);
+  } finally {
+    console.error = realConsoleError;
+  }
+  check("an action succeeds even when its log line cannot be written", stillWorks.status === 200);
+  check("…and the reason goes to the function log instead", functionLog.some((line) => /action log capture failed orders/.test(line) && /log database down/.test(line)), functionLog);
+
+  // An upload is not copied into memory for the sake of a log line.
+  const upload = withActionLog("media", async (request: Request) => {
+    const form = await request.formData();
+    return Response.json({ ok: true, name: (form.get("file") as File).name });
+  }, { ...useDb, fallback: "upload" });
+  const form = new FormData();
+  form.set("file", new File([new Uint8Array(2048)], "karahi.jpg", { type: "image/jpeg" }));
+  const uploaded = await upload(new Request("http://local.test/api/ops/upload", { method: "POST", body: form, headers: { cookie: sessionCookie } }), { params: Promise.resolve({}) });
+  check("a multipart upload passes through and is logged by its fallback name", uploaded.status === 200 && (await newest()).action === "media.upload", (await newest()).action);
+
+  check("a target is read from the body when the route has none", deriveTarget("menu", { action: "delete", id: 9 }, null, null) === "menu_item:9", deriveTarget("menu", { action: "delete", id: 9 }, null, null));
+  check("a sign-in is never named from the text of the form", deriveTarget("auth", { email: "anything@example.com" }, null, null) === null);
+  check(
+    "the staff route names an account from the staff table, not from the form",
+    /SELECT email FROM staff WHERE id = \$1/.test(read("app/api/ops/staff/route.ts")) && /SELECT email FROM staff WHERE lower\(email\) = \$1/.test(read("app/api/ops/staff/route.ts")),
+  );
+  check("a placed order is named by the code the customer was given", deriveTarget("orders", { items: [] }, null, { ok: true, code: "KB-1234AB" }) === "order:KB-1234AB");
+
+  // --- every route that changes something is wrapped
+  const routeFiles: string[] = [];
+  const walkRoutes = (dir: string) => {
+    for (const entry of nodeFs.readdirSync(dir, { withFileTypes: true })) {
+      const full = nodePath.join(dir, entry.name);
+      if (entry.isDirectory()) walkRoutes(full);
+      else if (entry.name === "route.ts") routeFiles.push(full);
+    }
+  };
+  for (const dir of ["app/api/ops", "app/api/staff", "app/api/broadcast"]) walkRoutes(nodePath.join(process.cwd(), dir));
+  routeFiles.push(nodePath.join(process.cwd(), "app/api/orders/route.ts"));
+  const mutating = routeFiles.filter((file) => /export\s+(async\s+function|const)\s+(POST|PUT|PATCH|DELETE)\b/.test(nodeFs.readFileSync(file, "utf8")));
+  const unwrapped = mutating.filter((file) => !/export const (POST|PUT|PATCH|DELETE) = withActionLog\(/.test(nodeFs.readFileSync(file, "utf8")));
+  check("there are staff routes to log", mutating.length >= 25, mutating.length);
+  check(
+    "every staff route that changes something writes to the action log",
+    unwrapped.length === 0,
+    unwrapped.map((file) => nodePath.relative(process.cwd(), file)),
+  );
+
+  // --- reading it back
+  const problems = await listActions(db, { problems: true });
+  check("the log can be filtered to problems", problems.total >= 8 && problems.rows.every((row) => row.outcome !== "ok"), problems.total);
+  const byComponent = await listActions(db, { component: "auth" });
+  check("…and by component", byComponent.total === 6 && byComponent.rows.every((row) => row.component === "auth"), byComponent.total);
+  const byReference = await listActions(db, { q: okRow.reference.toLowerCase() });
+  check("…and searched by reference, in any case", byReference.total === 1 && byReference.rows[0].id === okRow.id, byReference.total);
+  const paged = await listActions(db, { limit: 2, offset: 1 });
+  check("paging reports the full total", paged.rows.length === 2 && paged.total === (await countActions()), [paged.rows.length, paged.total]);
+  check("a filter cannot be used to inject SQL", (await listActions(db, { component: "x'; DROP TABLE action_logs; --", q: "%' OR 1=1 --" })).total === 0 && (await countActions()) > 0);
+  const actionStats = await actionSummary(db);
+  check("the summary separates what worked from what did not", actionStats.total === (await countActions()) && actionStats.problems24h === problems.total && actionStats.ok24h + actionStats.problems24h === actionStats.last24h, actionStats);
+
+  // --- one format, three exports
+  const text = formatActionText(failedRow);
+  check("the text record opens with timestamp, level and reference", new RegExp(`^\\d{4}-\\d{2}-\\d{2}T[\\d:.]+Z CRITICAL\\s+${failedRow.reference} orders\\.dispatch `).test(text), text.split("\n")[0]);
+  check("…carries key=value pairs a search can match", /outcome=failed/.test(text) && /code=DB_UNREACHABLE/.test(text) && new RegExp(`actor=${adminStaff.email}`).test(text), text.split("\n")[0]);
+  check("…and the numbered course of action with owners", /course_of_action: DB_UNREACHABLE/.test(text) && /\n\s+1\. \[developer\] /.test(text) && /\n\s+verify: /.test(text), text);
+  const csv = actionsCsv([failedRow, okRow]);
+  check("the CSV has a header and one line per row", csv.split("\r\n").filter(Boolean).length === 3 && csv.startsWith("occurred_at,level,reference,"), csv.split("\r\n")[0]);
+  const hostile = await recordAction(db, { component: "menu", action: "save", outcome: "rejected", httpStatus: 400, actor: "=cmd|' /C calc'!A0", error: "=HYPERLINK(\"http://evil\")" });
+  const hostileRow = await getAction(db, hostile as string);
+  check("a value that would run as a spreadsheet formula is defused", /,'=cmd/.test(actionsCsv([hostileRow!])), actionsCsv([hostileRow!]).split("\r\n")[1]);
+  const ndjson = actionsNdjson([failedRow, okRow]).trim().split("\n").map((line) => JSON.parse(line) as { ref: string; course_of_action: { steps: unknown[] } });
+  check("the NDJSON is one object per line, course of action included", ndjson.length === 2 && ndjson[0].ref === failedRow.reference && ndjson[0].course_of_action.steps.length > 0);
+  const anyFinding = (await openLogs(db))[0];
+  const findingText = formatFindingText(anyFinding);
+  check("a finding uses the same format", new RegExp(`${anyFinding.reference} ${anyFinding.code} status=open`).test(findingText) && /course_of_action:\n\s+1\. \[/.test(findingText), findingText.split("\n")[0]);
+  check("findings export as CSV too", findingsCsv([anyFinding]).split("\r\n").filter(Boolean).length === 2);
+
+  // --- the audit reads the action log
+  for (let i = 0; i < 3; i += 1) {
+    await recordAction(db, { component: "whatsapp", action: "publish", outcome: "failed", httpStatus: 502, actor: adminStaff.email, actorRole: "admin", error: "(#190) Error validating access token: Session has expired" });
+  }
+  const fromActions = await runAudit(db);
+  const repeated = fromActions.findings.find((f) => f.code === "ACT_REPEATED_FAILURE");
+  check("the same action failing three times becomes a standing finding", Boolean(repeated) && /whatsapp\.publish/.test(repeated?.title ?? ""), fromActions.findings.map((f) => f.code));
+  check("…with the fix for the cause, not for the symptom", /Which token works/.test(repeated?.steps?.[0]?.do ?? ""), repeated?.steps?.[0]);
+  check("a burst of failed sign-ins is reported", fromActions.findings.some((f) => f.code === "SEC_LOGIN_FAILURES"), fromActions.findings.map((f) => f.code));
+  const related = await recordAction(db, { component: "auth", action: "login", outcome: "denied", httpStatus: 401, actor: "someone@khanbaba.com.au" });
+  check("a recorded action always gets a reference back", /^ACT-AU-\d{6}-/.test(related ?? ""), related);
+
+  // --- retention
+  const old = async (level: string, days: number) =>
+    db.query(
+      "INSERT INTO action_logs (reference, occurred_at, level, component, action, outcome, message, course) VALUES ($1, now() - make_interval(days => $2), $3, 'menu', 'menu.save', $4, 'old row', '{}')",
+      [`ACT-OLD-${level}-${days}`, days, level, level === "error" ? "failed" : "ok"],
+    );
+  await old("info", 40);
+  await old("notice", 40);
+  await old("error", 40);
+  await old("error", 200);
+  const pruned = await pruneActions(db);
+  const survivors = (await db.query<{ reference: string }>("SELECT reference FROM action_logs WHERE reference LIKE 'ACT-OLD-%' ORDER BY reference")).map((row) => row.reference);
+  check("pruning reports how many rows it removed", pruned === 2, pruned);
+  check(
+    "routine rows go after 30 days; sensitive changes and problems are kept 180",
+    survivors.join() === "ACT-OLD-error-40,ACT-OLD-notice-40",
+    survivors,
+  );
+
+  // --- the tables are closed to Supabase's public Data API
+  const rls = await db.query<{ relname: string; relrowsecurity: boolean }>(
+    "SELECT relname, relrowsecurity FROM pg_class WHERE relname IN ('action_logs','operation_logs') ORDER BY relname",
+  );
+  check("both log tables have row level security on", rls.length === 2 && rls.every((row) => row.relrowsecurity === true), rls);
+  check("…and the application, as owner, still reads and writes them", (await countActions()) > 0);
 
   await harness.close();
 
